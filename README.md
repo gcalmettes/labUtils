@@ -36,3 +36,5 @@ Tools: Python
 Simple algorithm to compute the variance map of an image.
 
 An application of the varMap tool to detect and quantify the translocation of the hexokinase protein from mitochondria to cytosol has been published in our 2013 paper [A Quantitative Method to Track Protein Translocation between Intracellular Compartments in Real-Time in Live Cells Using Weighted Local Variance Image Analysis](http://journals.plos.org/plosone/article?id=10.1371/journal.pone.0081988)
+
+Tools: Python
