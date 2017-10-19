@@ -25,18 +25,18 @@ CLASSIFIERS = ["Development Status :: 3 - Alpha",
                "Topic :: Scientific/Engineering"]
 
 # Description should be a one-liner:
-description = "atfFilesAnalyzer: extract heart contraction data from .atf files"
+description = "atfFileAnalyzer: extract heart contraction data from .atf files"
 # Long description will go up on the pypi page
 long_description = """
 
-langendorff_atf_analyzer
+atfFileAnalyzer
 ========
 
 Extract contraction data from .atf langendorff heart data recorded with pClamp
 
 License
 =======
-``langendorff_atf_analyzer`` is licensed under the terms of the MIT license. See the file
+``atfFileAnalyzer`` is licensed under the terms of the MIT license. See the file
 "LICENSE" for information on the history of this software, terms & conditions
 for usage, and a DISCLAIMER OF ALL WARRANTIES.
 
@@ -45,7 +45,7 @@ All trademarks referenced herein are property of their respective holders.
 Copyright (c) 2015--, Guillaume Calmettes, The University of California Los Angeles
 """
 
-NAME = "langendorff_atf_analyzer"
+NAME = "atfFileAnalyzer"
 MAINTAINER = "Guillaume Calmettes"
 MAINTAINER_EMAIL = " "
 DESCRIPTION = description
@@ -60,7 +60,6 @@ MAJOR = _version_major
 MINOR = _version_minor
 MICRO = _version_micro
 VERSION = __version__
-PACKAGES = ['langendorff_atf_analyzer',
-            'langendorff_atf_analyzer.tests']
-PACKAGE_DATA = {'langendorff_atf_analyzer': [pjoin('data', '*')]}
+PACKAGES = ['atfFileAnalyzer']
+PACKAGE_DATA = {'atfFileAnalyzer': [pjoin('data', '*')]}
 REQUIRES = ["numpy", "pandas"]

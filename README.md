@@ -15,7 +15,7 @@ Used to analyze files from Langendorff perfused hearts experiments and extract H
 
 Tools: Python
 
-Dependencies: Numpy, Pandas, Matplotlib
+Dependencies: Numpy, Pandas, Matplotlib (if plot option engaged)
 
 ### FRETanalysis
 
