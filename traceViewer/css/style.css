@@ -1,0 +1,19 @@
+body { font: 12px Arial;}
+
+path {
+    stroke: black;
+    stroke-width: 2;
+    fill: none;
+}
+.axis line {
+    fill: none;
+    stroke: grey;
+    stroke-width: 1;
+    shape-rendering: crispEdges;
+}
+
+.zoom {
+  cursor: move;
+  fill: none;
+  pointer-events: all;
+}

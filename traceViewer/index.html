@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<head>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+
+<body>
+
+	<div>
+		<!-- file selector -->
+		<input type="file" accept=".csv" id="myFile" multiple size="50">
+		<!-- tolerance slider -->
+		<label style="font-size: 1.5em;">Tolerance: <span id="toleranceLabel" style="color: goldenrod; font-size: 1em;">0.020</span></label>
+		<input type="range" min="0.000" max="0.200" value=0.02 step="0.001" id="toleranceSlider" style="width: 20em;">
+	</div>
+	<div>
+		<svg width="960" height="500"></svg>
+	</div>
+
+  <script src="js/d3.v4.min.js"></script>
+  <script src="js/simplify.js"></script>
+  <script src="js/main.js"></script>
+
+</body>
