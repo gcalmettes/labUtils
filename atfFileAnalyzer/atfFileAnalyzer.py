@@ -28,7 +28,7 @@ class Langendorff:
         x_axis = np.array(x_axis)
         return x_axis, y_axis
 
-    def _peakdetect(self, y_axis, x_axis = None, lookahead = 300, delta=0):
+    def _peakdetect(self, y_axis, x_axis = None, lookahead = 300, delta=5):
         """
         Converted from/based on a MATLAB script at:
         http://billauer.co.il/peakdet.html
@@ -149,12 +149,16 @@ class Langendorff:
     #===========================================================
     def __init__(self, experiment_file):
         self.name = experiment_file
-        self.data = pd.read_table(experiment_file, skiprows=10, names=['time', 'trace'])
+        self.data = pd.read_table(experiment_file, skiprows=9)
+        if len(self.data.columns)==2:
+            self.data.columns = ['time', 'trace']
+        else:
+            self.data.columns = ['time', 'ekg', 'trace']
         self.sampling_rate = 1/(self.data.time[1]-self.data.time[0])
 
 
 
-    def extract_contraction_peaks(self, lookahead=100, delta=0.05,
+    def extract_contraction_peaks(self, lookahead=100, delta=0.1,
             sample_average=50, normalization=[600, 1200]):
         #Peak detection
         maxtab, mintab = self._peakdetect(self.data.trace, self.data.time, lookahead=lookahead, delta=delta)
