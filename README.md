@@ -2,6 +2,14 @@
 
 Collection of script/tools to simplify the data analysis workflow of the lab.
 
+### msAnalysis
+
+TKinter app to analyze Mass Spectroscopy data.
+
+Tools: Python
+
+Dependencies: TKinter, Numpy, Pandas, Scipy
+
 ### traceViewer
 
 Quickly load data from a csv file and inspect it using a focus+context approach.
