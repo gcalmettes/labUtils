@@ -349,6 +349,9 @@ def plotStandardAndSaveResults(appData, useMask=False):
 
 	if not useMask:
 		appData["FAMESnames"] = {}
+		extension = ""
+	else:
+		extension = "_modified"
 
 	for i,(col,ax) in enumerate(zip(appData["Standard-absorbance"].filter(regex="C").columns,  axes.ravel())):
 		carbon,mass = col.split(" ")
@@ -424,9 +427,9 @@ def plotStandardAndSaveResults(appData, useMask=False):
 	resultsDf["IDsample"]=appData["dataDf_norm"]["IDsample"]
 	resultsDf["MSsample"]=appData["dataDf_norm"]["MSsample"]
 	resultsDf = resultsDf[np.concatenate([["MSsample", "IDsample"], np.array(resultsDf.filter(regex="C").columns)])]
-	resultsDf.to_excel(f"{savePath}/results.xls", index=False)
-	fig1.savefig(f"{savePath}/standard-fit.pdf")
-	fig2.savefig(f"{savePath}/standard-fit-with-data.pdf")
+	resultsDf.to_excel(f"{savePath}/results{extension}.xls", index=False)
+	fig1.savefig(f"{savePath}/standard-fit{extension}.pdf")
+	fig2.savefig(f"{savePath}/standard-fit-with-data{extension}.pdf")
 	
 	# close Matplotlib processes
 	plt.close('all')
