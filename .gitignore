@@ -101,4 +101,4 @@ ENV/
 .mypy_cache/
 
 # msAnalyzer results folder
-msAnalizer/results
+msAnalyzer/data/results/
