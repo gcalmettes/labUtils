@@ -89,11 +89,10 @@ def modifySelection(frameToKill, selection):
 
 	plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox)
 
-	# canvas.draw()
 	figFrame = canvas.get_tk_widget()#.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
 	figFrame.grid(row=1, column=1, columnspan=2, rowspan=3, pady=10, padx=10)
 
-	plotButton = ttk.Button(plotFrame, text="Select", command = lambda: plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox))
+	plotButton = ttk.Button(plotFrame, text="Remove", command = lambda: plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox))
 	plotButton.grid(row=2, column=3, pady=5)
 
 	def goToNextPlot():
@@ -101,12 +100,18 @@ def modifySelection(frameToKill, selection):
 		if currentFAMESidx+1<len(FAMESselected):
 			currentFAMESidx = currentFAMESidx+1
 			plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox)
+			if currentFAMESidx == len(FAMESselected)-1:
+				plotButton2["text"]="Send"
 		else:
 			plt.close('all')
 			plotFrame.destroy()
 			plotStandardAndSaveResults(appData, useMask=True)
 
-	plotButton2 = ttk.Button(plotFrame, text="Next", command = lambda: goToNextPlot())
+	if currentFAMESidx == len(FAMESselected)-1:
+		textButton = "Send"
+	else:
+		textButton = "Next"
+	plotButton2 = ttk.Button(plotFrame, text=textButton, command = lambda: goToNextPlot())
 	plotButton2.grid(row=2, column=4, pady=5)
 
 	def quitCurrent():
