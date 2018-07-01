@@ -1,4 +1,5 @@
 import os
+import sys
 import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog
@@ -16,7 +17,9 @@ import scipy.stats as stats
 ## GUI
 ############################
 
-def initialFileChoser():
+def initialFileChoser(directory=False):
+	if not directory:
+		directory = os.getcwd()
 	'''Temporary app to get filenames before building main app'''
 	# Build a list of tuples for each file type the file dialog should display
 	appFiletypes = [('excel files', '.xlsx'), ('all files', '.*')]
@@ -26,7 +29,7 @@ def initialFileChoser():
 	appTitle = appWindow.title("Choose Files")
 	# Ask the user to select a one or more file names.
 	fileNames = filedialog.askopenfilenames(parent=appWindow,
-																					initialdir=os.getcwd(),
+																					initialdir=directory,
 		                                    	title="Please select the files:",
 		                                    	filetypes=appFiletypes
 		                                    	)
@@ -459,9 +462,13 @@ if __name__ == '__main__':
 		"internalRef": "C19:0"
 	}
 	
+	if len(sys.argv) == 1: #no arguments given to the function
+		initialDirectory = False
+	else:
+		initialDirectory = sys.argv[1]
 
 	# Choose data and template files
-	fileNames = initialFileChoser()
+	fileNames = initialFileChoser(initialDirectory)
 	appData["dataFileName"],appData["templateFileName"] = getDataAndTemplateFileNames(fileNames)
 	appData["pathDirName"] = os.path.dirname(appData["dataFileName"])
 	print(f"Path of working directory: {appData['pathDirName']}")
