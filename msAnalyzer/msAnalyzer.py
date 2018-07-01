@@ -18,9 +18,9 @@ import scipy.stats as stats
 ############################
 
 def initialFileChoser(directory=False):
+	'''Temporary app to get filenames before building main app'''
 	if not directory:
 		directory = os.getcwd()
-	'''Temporary app to get filenames before building main app'''
 	# Build a list of tuples for each file type the file dialog should display
 	appFiletypes = [('excel files', '.xlsx'), ('all files', '.*')]
 	# Main window
@@ -37,6 +37,7 @@ def initialFileChoser(directory=False):
 	return fileNames
 
 def popupMsg(msg):
+	'''Popup message window'''
 	popup = tk.Tk()
 	popup.wm_title("Look at the standard plots!")
 	label = ttk.Label(popup, text=msg, font=("Verdana", 14))
@@ -439,10 +440,15 @@ def plotStandardAndSaveResults(appData, useMask=False):
 	fig1.savefig(f"{savePath}/standard-fit{extension}.pdf")
 	fig2.savefig(f"{savePath}/standard-fit-with-data{extension}.pdf")
 	
+	print(f"The standard plots have been saved at {savePath}/standard-fit{extension}.pdf")
+	print(f"The results calculated from the standard regression lines have been saved at {savePath}/standard-fit-with-data{extension}.pdf")
+	print(f"The analysis results have been saved at {savePath}/results{extension}.xls")
+
+	
 	# close Matplotlib processes
 	plt.close('all')
 
-	popupMsg("Do you want to modify the standards?")
+	popupMsg("The results and plots have been saved.\nCheck out the standard plots.\nDo you want to modify the standards?")
 
 
 def makeResultFolder():
@@ -462,7 +468,8 @@ if __name__ == '__main__':
 		"internalRef": "C19:0"
 	}
 	
-	if len(sys.argv) == 1: #no arguments given to the function
+	# Directory to look for data files defined?
+	if len(sys.argv) == 1: # no arguments given to the function
 		initialDirectory = False
 	else:
 		initialDirectory = sys.argv[1]
