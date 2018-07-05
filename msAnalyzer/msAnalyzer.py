@@ -18,7 +18,7 @@ import scipy.stats as stats
 ############################
 
 def initialFileChoser(directory=False):
-	'''Temporary app to get filenames before building main app'''
+	'''Temporary app window to get filenames before building main app'''
 	if not directory:
 		directory = os.getcwd()
 	# Build a list of tuples for each file type the file dialog should display
@@ -308,7 +308,11 @@ def getStandardMoles(fileName, stdVols, volMix, volMixTotal, sheet_name="STANDAR
 
 
 def getSampleMap(fileName, sheet_name="MAP"):
-	templateMap = pd.read_excel(fileName, sheet_name=sheet_name).dropna()
+	templateMap = pd.read_excel(fileName, sheet_name=sheet_name)
+	declaredIdx = templateMap.SampleName.dropna().index
+	templateMap = templateMap.loc[declaredIdx]
+	# fill in missing weights with 1
+	templateMap.loc[templateMap.SampleWeight.isna(), "SampleWeight"]=1
 
 	#Add column to dataDf_norm with the sample ID defined in the MAP file
 	addIDsampleToDataDf(templateMap)
@@ -330,6 +334,9 @@ def addIDsampleToDataDf(templateMap):
 	for id,sample in templateMap.loc[:, ["SampleID", "SampleName"]].values:
 		idNum = id.split("_")[1]
 		appData["dataDf_norm"].loc[[x for x in range(len(appData["dataDf_norm"])) if appData["dataDf_norm"].Name.apply(lambda x: x.split("F")[1]).loc[x] == idNum], "IDsample"] = sample
+
+	# add each sample weights for later normalization
+	appData["dataDf_norm"]["SampleWeight"] = templateMap.SampleWeight
 
 	# reorder rows based on template and reindex with range
 	newOrder = list(map(lambda x: f"F{x.split('_')[1]}", templateMap.SampleID.values))
@@ -389,7 +396,7 @@ def plotStandardAndSaveResults(appData, useMask=False):
 			ax.text(ax.get_xlim()[0]+(ax.get_xlim()[1]-ax.get_xlim()[0])*0.05, ax.get_ylim()[0]+(ax.get_ylim()[1]-ax.get_ylim()[0])*0.9, f"R2={stats.pearsonr(xvals[mask], yvals[mask])[0]**2:.4f}", size=14, color="purple")
 			ax.text(ax.get_xlim()[0]+(ax.get_xlim()[1]-ax.get_xlim()[0])*0.97, ax.get_ylim()[0]+(ax.get_ylim()[1]-ax.get_ylim()[0])*0.05, f"y={slope:.4f}x+{intercept:.4f}", size=14, color="red", ha="right")
 			# calculate final results and save
-			resultsDf[col] = (appData["dataDf_norm"][col]-intercept)/slope
+			resultsDf[col] = ((appData["dataDf_norm"][col]-intercept)/slope)/appData["dataDf_norm"]["SampleWeight"]
 		ax.set_title(col)
 		ax.set_xlabel("Quantity (nMoles)")
 		ax.set_ylabel("Absorbance")
