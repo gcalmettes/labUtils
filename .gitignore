@@ -102,3 +102,4 @@ ENV/
 
 # msAnalyzer results folder
 msAnalyzer/data/results/
+msAnalyzer/Dylan/

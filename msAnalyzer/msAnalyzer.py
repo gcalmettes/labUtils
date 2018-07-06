@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog
@@ -13,456 +14,564 @@ import pandas as pd
 import scipy.stats as stats
 
 
+
+
+############################
+## Data object
+############################
+
+class MSDataContainer:
+
+  ##################
+  ## Init and setup
+  ##################
+
+  def __init__(self, fileNames, internalRef="C19:0"):
+    assert len(fileNames)==2 , "You must choose 2 files!"
+    self.internalRef = internalRef
+    self.dataFileName, self.templateFileName = self.__getDataAndTemplateFileNames(fileNames)
+    self.pathDirName = os.path.dirname(self.dataFileName)
+    self.__regexExpression = {"NotLabeled": "([0-9]+)_([0-9]+)_([0-9]+)",
+                              "Labeled": "([0-9]+)_([0-9]+).[0-9]+"}
+    self.experimentType, self.dataColNames = self.__getExperimentTypeAndDataColumNames()
+    self.dataDf = self.__getCleanedUpDataFrames()
+    self.__standardDf_template = self.__getStandardsTemplateDf()
+    self.volumeMixTotal = 500
+    self.volumeMixForPrep = 100
+    self.volumeSample = 100
+    self.volumeStandards = [1, 5, 10, 20, 40, 80]
+
+    self.standardDf_nMoles = self.computeStandardMoles()
+
+  def __getDataAndTemplateFileNames(self, fileNames, templateKeyword="template"):
+    '''Classify files (data or template) based on fileName'''
+    dataFileName = [fileName for fileName in fileNames if templateKeyword not in fileName][0]
+    templateFileName = [fileName for fileName in fileNames if fileName != dataFileName][0]
+    return [dataFileName, templateFileName]
+
+  def __getExperimentTypeAndDataColumNames(self):
+    """Determine the type of experiment (Labeled/Unlabeled) based on column names"""
+    colNames = pd.read_excel(self.dataFileName, nrows=2).filter(regex="[0-9]+[.|_][0-9]+[.|_][0-9]+").columns
+    if len(re.findall(self.__regexExpression["NotLabeled"], colNames[0]))==1:
+      experimentType = "Not Labeled"
+    elif len(re.findall(self.__regexExpression["Labeled"], colNames[0]))==1:
+      experimentType = "Labeled"
+    else:
+      raise Error("The experiment type could not be determined")
+    return experimentType,colNames
+
+  def __getCleanedUpDataFrames(self):
+    '''Return a simplified pandas dataFrame'''
+    
+    # load data and template files and isolate data part
+    df = pd.read_excel(self.dataFileName, skiprows=1)
+    templateMap = pd.read_excel(self.templateFileName, sheet_name="MAP")
+
+    df_Meta,df_Data = self.__getOrderedDfBasedOnTemplate(df, templateMap)
+        
+    if self.experimentType == "Not Labeled":
+      regex = self.__regexExpression["NotLabeled"]
+      self.dataColNames = [f"C{carbon[:2]}:{carbon[2:]} ({mass})" for name in self.dataColNames for num,carbon,mass in re.findall(regex, name)]
+      df_Data.columns = self.dataColNames
+    elif self.experimentType == "Labeled":
+      regex = self.__regexExpression["Labeled"]
+      ionAndMass = np.array([(int(num), int(mass)) for name in self.dataColNames for num,mass in re.findall(regex, name)])
+      assert ionAndMass[0][1] == 242, "Data not starting with 14:0 fatty acid!"
+      # get indices that would sort the array by ion
+      order = np.argsort([ion for ion,mass in ionAndMass])
+      # reorder the columns by ions
+      df_Data = df_Data.iloc[:, order]
+      FAMasses = ionAndMass[order, 1]
+      # get main FA by subtracting ions weights and checking jumps in weights
+      # for the same fatty acid, the next weight always increase by 1. or it's other fatty acid
+      differences = FAMasses[1:]-FAMasses[:-1]
+      idx = np.concatenate([[0], np.where(differences!=1)[0]+1])        
+      # list of (idx, carbon, saturation)
+      FAparent = [(idx[i], np.ceil((mass-242+14*14)/14).astype(int), [int((desat!=0)*(14-desat)/2) for desat in [(mass-242)%14]][0]) for i,mass in enumerate(FAMasses[idx])]
+      self.dataColNames = [ f"C{carbon}:{sat} M.{ion}" for i,(idx,carbon,sat) in enumerate(FAparent[:-1]) for ion in range(idx-idx, FAparent[i+1][0]-idx)]
+      # add last carbon ions
+      self.dataColNames = self.dataColNames + [f"C{carbon}:{sat} M.{ion}" for ion in range(FAparent[-1][0]-FAparent[-1][0], len(FAMasses)-FAparent[-1][0]) for (carbon,sat) in [[FAparent[-1][1], FAparent[-1][2]]]]
+      df_Data.columns = self.dataColNames
+
+    # get sample meta info from template file
+    df_TemplateInfo = self.__getExperimentMetaInfoFromMAP(templateMap)
+
+    assert len(df_TemplateInfo)==len(df_Data), \
+    f"The number of declared samples in the template (n={len(df_TemplateInfo)}) does not match the number of samples detected in the data file (n={len(df_Data)})"
+
+    return pd.concat([df_Meta, df_TemplateInfo, df_Data], axis=1)
+
+  def __getOrderedDfBasedOnTemplate(self, df, templateMap):
+    '''Get new df_Data and df_Meta based on template'''
+
+    # reorder rows based on template and reindex with range
+    newOrder = list(map(lambda x: f"F{x.split('_')[1]}", templateMap.SampleID.values))[:len(df)]
+    df.index=df["Name"]
+    df = df.reindex(newOrder)
+    df.index = list(range(len(df)))
+    # df_Data["MSsample"] = templateMap["SampleID"]
+
+    df_Meta = df[["Name", "Data File"]]
+    df_Data = df.iloc[:, 7:] # 7 first cols are info
+    return df_Meta, df_Data
+
+  def __getExperimentMetaInfoFromMAP(self, templateMap):
+    '''Return the meta info of the experiment'''
+    # keep only rows with declared names
+    declaredIdx = templateMap.SampleName.dropna().index
+    templateMap = templateMap.loc[declaredIdx]
+    # fill in missing weights with 1
+    templateMap.loc[templateMap.SampleWeight.isna(), "SampleWeight"]=1
+    return templateMap[["SampleID", "SampleName", "SampleWeight", "Code", "Comments"]]
+
+  def __getStandardsTemplateDf(self, sheetKeyword="STANDARD"):
+    sheetName = f"{sheetKeyword}_{'_'.join(self.experimentType.upper().split(' '))}"
+    templateStandard = pd.read_excel(self.templateFileName, sheet_name=sheetName)
+    return templateStandard
+
+  def __makeResultFolder(self):
+    directory = f"{self.pathDirName}/results"
+    if not os.path.exists(directory):
+      os.mkdir(directory)
+    return directory
+
+  ##################
+  ## Analysis and Updates
+  ##################
+
+  def updateInternalRef(self, newInternalRef):
+    '''Update FAMES chosen as internal reference and normalize data to it'''
+    print(f"Internal Reference changed from {self.internalRef} to {newInternalRef}")
+    self.internalRef = newInternalRef
+    self.dataDf_norm = self.computeNormalizedData()
+
+  def updateStandards(self, volumeMixForPrep, volumeMixTotal, volumeStandards):
+    self.volumeMixForPrep = volumeMixForPrep
+    self.volumeMixTotal = volumeMixTotal
+    self.volumeStandards = volumeStandards
+    self.standardDf_nMoles = self.computeStandardMoles()
+
+  def computeStandardMoles(self):
+    '''Calculate nMoles for the standards'''
+    template = self.__standardDf_template.copy()
+    template["Conc in Master Mix (ug/ul)"] = template["Stock conc (ug/ul)"]*template["Weight (%)"]/100*self.volumeMixForPrep/self.volumeMixTotal
+    # concentration of each carbon per standard volume
+    for ul in self.volumeStandards:
+      template[f"Std-Conc-{ul}"]=ul*(template["Conc in Master Mix (ug/ul)"]+template["Extra"])
+    # nMol of each FAMES per standard vol
+    for ul in self.volumeStandards:
+      template[f"Std-nMol-{ul}"] = 1000*template[f"Std-Conc-{ul}"]/template["MW"]
+    # create a clean template with only masses and carbon name
+    templateClean = pd.concat([template.Chain, template.filter(regex="Std-nMol")], axis=1).transpose()
+    templateClean.columns = list(map(lambda x: "C"+x, templateClean.iloc[0]))
+    templateClean = templateClean.iloc[1:]
+    return templateClean
+
+  def getStandardAbsorbance(self):
+    '''Get normalized absorbance data for standards'''
+    return self.dataDf_norm.loc[self.dataDf_norm.SampleName.str.match('S[0-9]+')]
+
+
+  def computeNormalizedData(self):
+    '''Normalize the data to the internal ref'''
+    dataDf_norm = self.dataDf.copy()
+    dataDf_norm.iloc[:, 7:] = dataDf_norm.iloc[:, 7:].values/dataDf_norm[self.internalRef].values[:, np.newaxis]
+    return dataDf_norm
+
+  def saveStandardCurvesAndResults(self, useMask=False):
+    # get current folder and create result folder if needed
+    savePath = self.__makeResultFolder()
+    
+    # will store final results
+    resultsDf = pd.DataFrame(index=self.dataDf_norm.index)
+
+    # Plot of Standard
+    stdAbsorbance = self.getStandardAbsorbance().filter(regex="C[0-9]")
+    assert len(stdAbsorbance) == len(self.standardDf_nMoles),\
+    f"The number of standards declared in the STANDARD_{'_'.join(self.experimentType.upper().split(' '))} sheet (n={len(self.standardDf_nMoles)}) is different than the number of standards declared in the data file (n={len(stdAbsorbance)})"
+    
+    nTotal = len(stdAbsorbance.columns)
+    nCols = 4
+    if nTotal%4==0:
+      nRows = int(nTotal/nCols)
+    else:
+      nRows = int(np.floor(nTotal/nCols)+1)
+
+    fig1,axes = plt.subplots(ncols=nCols, nrows=nRows, figsize=(20, nRows*4))
+
+    if not useMask:
+      self._maskFAMES = {}
+      extension = ""
+    else:
+      extension = "_modified"
+
+    for i,(col,ax) in enumerate(zip(stdAbsorbance.columns,  axes.ravel())):
+      carbon = re.findall(r"(C\d+:\d+)", col)[0]
+      if carbon in self.standardDf_nMoles.columns:
+        # fit of data
+        xvals = self.standardDf_nMoles[carbon].values
+        yvals = stdAbsorbance[col].values
+        # print(carbon)
+        
+        if not useMask:
+          mask = [~np.logical_or(np.isnan(x), np.isnan(y)) for x,y in zip(xvals, yvals)]
+          # add carbon to valid standard FAMES and save mask
+          self._maskFAMES[col] = {"originalMask": mask}
+        else:
+          try:
+            mask = self._maskFAMES[col]["newMask"]
+          except:
+            mask = self._maskFAMES[col]["originalMask"]
+
+        slope,intercept = np.polyfit(np.array(xvals[mask], dtype=float), np.array(yvals[mask], dtype=float), 1)
+        xfit = [np.min(xvals), np.max(xvals)]
+        yfit = np.polyval([slope, intercept], xfit)
+        # plot of data
+        ax.plot(xvals[mask], yvals[mask], "o")
+        ax.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "o", mfc="none", color="black", mew=2)
+        ax.plot(xfit, yfit, "red")
+        ax.text(ax.get_xlim()[0]+(ax.get_xlim()[1]-ax.get_xlim()[0])*0.05, ax.get_ylim()[0]+(ax.get_ylim()[1]-ax.get_ylim()[0])*0.9, f"R2={stats.pearsonr(xvals[mask], yvals[mask])[0]**2:.4f}", size=14, color="purple")
+        ax.text(ax.get_xlim()[0]+(ax.get_xlim()[1]-ax.get_xlim()[0])*0.97, ax.get_ylim()[0]+(ax.get_ylim()[1]-ax.get_ylim()[0])*0.05, f"y={slope:.4f}x+{intercept:.4f}", size=14, color="red", ha="right")
+        # calculate final results and save
+        resultsDf[col] = ((self.dataDf_norm[col]-intercept)/slope)/self.dataDf_norm["SampleWeight"]
+      ax.set_title(col)
+      ax.set_xlabel("Quantity (nMoles)")
+      ax.set_ylabel("Absorbance")
+
+    fig1.tight_layout()
+
+    # Plot of results on standard curves
+    nTotal = len(resultsDf.filter(regex="C[0-9]").columns)
+    nCols = 4
+    if nTotal%4==0:
+      nRows = int(nTotal/nCols)
+    else:
+      nRows = int(np.floor(nTotal/nCols)+1)
+
+    fig2,axes = plt.subplots(ncols=nCols, nrows=nRows, figsize=(20, nRows*4))
+
+    for i,(col,ax) in enumerate(zip(resultsDf.filter(regex="C[0-9]").columns,  axes.ravel())):
+      carbon = re.findall(r"(C\d+:\d+)", col)[0]
+      if carbon in self.standardDf_nMoles.columns:
+        # fit of data
+        xvals = self.standardDf_nMoles[carbon].values
+        yvals = stdAbsorbance[col].values
+        try:
+          mask = self._maskFAMES[col]["newMask"]
+        except:
+          mask = self._maskFAMES[col]["originalMask"]
+        slope,intercept = np.polyfit(np.array(xvals[mask], dtype=float), np.array(yvals[mask], dtype=float), 1)
+        xfit = [np.min(xvals), np.max(xvals)]
+        yfit = np.polyval([slope, intercept], xfit)
+        # plot of data  
+        ax.plot(xvals[mask], yvals[mask], "o")
+        ax.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "x", color="black", ms=3)
+        ax.plot(xfit, yfit, "red")
+        # plot values calculated from curve
+        ax.plot(resultsDf[col], self.dataDf_norm[col], "o", alpha=0.3)
+      ax.set_title(col)
+      ax.set_xlabel("Quantity (nMoles)")
+      ax.set_ylabel("Absorbance")
+
+    fig2.tight_layout()
+    
+    # Save data
+    resultsDf["SampleID"]=self.dataDf_norm["SampleID"]
+    resultsDf["SampleName"]=self.dataDf_norm["SampleName"]
+    resultsDf["Comments"]=self.dataDf_norm["Comments"]
+    resultsDf = resultsDf[np.concatenate([["SampleID", "SampleName", "Comments"], np.array(resultsDf.filter(regex="C[0-9]").columns)])]
+    resultsDf.to_excel(f"{savePath}/results{extension}.xls", index=False)
+    fig1.savefig(f"{savePath}/standard-fit{extension}.pdf")
+    fig2.savefig(f"{savePath}/standard-fit-with-data{extension}.pdf")
+    
+    print(f"The standard curves have been saved at {savePath}/standard-fit{extension}.pdf")
+    print(f"The results calculated from the standard regression lines have been saved at {savePath}/standard-fit-with-data{extension}.pdf")
+    print(f"The analysis results have been saved at {savePath}/results{extension}.xls")
+    
+    # close Matplotlib processes
+    plt.close('all')
+
+
+
+
 ############################
 ## GUI
 ############################
 
 def initialFileChoser(directory=False):
-	'''Temporary app window to get filenames before building main app'''
-	if not directory:
-		directory = os.getcwd()
-	# Build a list of tuples for each file type the file dialog should display
-	appFiletypes = [('excel files', '.xlsx'), ('all files', '.*')]
-	# Main window
-	appWindow = tk.Tk()
-	appWindow.geometry("0x0") # hide the window
-	appTitle = appWindow.title("Choose Files")
-	# Ask the user to select a one or more file names.
-	fileNames = filedialog.askopenfilenames(parent=appWindow,
-																					initialdir=directory,
-		                                    	title="Please select the files:",
-		                                    	filetypes=appFiletypes
-		                                    	)
-	appWindow.destroy() # close the app
-	return fileNames
-
-def popupMsg(msg):
-	'''Popup message window'''
-	popup = tk.Tk()
-	popup.wm_title("Look at the standard plots!")
-	label = ttk.Label(popup, text=msg, font=("Verdana", 14))
-	label.grid(row=1, column=1, columnspan=2, padx=10, pady=10)
-		
-	B1 = ttk.Button(popup, text="Yes", command = lambda x=0: inspectPlots(popup))
-	B1.grid(row=2, column=1, pady=10)
-
-	def quitApp():
-		popup.destroy()
-		app.window.destroy()
-
-	B2 = ttk.Button(popup, text="No", command = quitApp)
-	B2.grid(row=2, column=2, pady=10)
-	popup.mainloop()
+  '''Temporary app window to get filenames before building main app'''
+  if not directory:
+    directory = os.getcwd()
+  # Build a list of tuples for each file type the file dialog should display
+  appFiletypes = [('excel files', '.xlsx'), ('all files', '.*')]
+  # Main window
+  appWindow = tk.Tk()
+  appWindow.geometry("0x0") # hide the window
+  appTitle = appWindow.title("Choose Files")
+  # Ask the user to select a one or more file names.
+  fileNames = filedialog.askopenfilenames(parent=appWindow,
+                                          initialdir=directory,
+                                          title="Please select the files:",
+                                          filetypes=appFiletypes
+                                          )
+  appWindow.destroy() # close the app
+  return fileNames
 
 
-def inspectPlots(popup):
-	popup.destroy()
-			
-	selectFrame = tk.Tk()
-	selectFrame.wm_title("FAMES standard to modify")
-	label = ttk.Label(selectFrame, text="Select the FAMES standard to modify", font=("Verdana", 14))
-	label.grid(row=1, column=1, columnspan=2, padx=10, pady=10)
+# Text widget that can call a callback function when modified
+# see https://stackoverflow.com/questions/40617515/python-tkinter-text-modified-callback
+class CustomText(tk.Text):
+  def __init__(self, *args, **kwargs):
+    """A text widget that report on internal widget commands"""
+    tk.Text.__init__(self, *args, **kwargs)
 
-	FAMESlistbox = tk.Listbox(selectFrame, height=10, selectmode='multiple')
-	for item in appData["FAMESnames"].keys():
-		FAMESlistbox.insert(tk.END, item)
-	FAMESlistbox.grid(row=2, column=1, columnspan=2, pady=10)
+    # create a proxy for the underlying widget
+    self._orig = self._w + "_orig"
+    self.tk.call("rename", self._w, self._orig)
+    self.tk.createcommand(self._w, self._proxy)
 
-	FAMESbutton = ttk.Button(selectFrame, text="Select", command = lambda: modifySelection(selectFrame, FAMESlistbox))
-	FAMESbutton.grid(row=3, column=1, columnspan=2, pady=10)
+  def _proxy(self, command, *args):
+    cmd = (self._orig, command) + args
+    result = self.tk.call(cmd)
 
+    if command in ("insert", "delete", "replace"):
+        self.event_generate("<<TextModified>>")
 
-def modifySelection(frameToKill, selection):
-	FAMESselected = [selection.get(i) for i in selection.curselection()]
-
-	# will go over all the selectedFAMES
-	currentFAMESidx = 0
-
-	fig,ax = plt.subplots(figsize=(4,3))
-	ax.set_xlabel("Quantity (nMoles)")
-	ax.set_ylabel("Absorbance")
-	fig.tight_layout()
-
-	plotFrame = tk.Tk()
-	plotFrame.wm_title("Standard curve inspector")
-
-	pointsListbox = tk.Listbox(plotFrame, height=8, selectmode='multiple')
-	pointsListbox.grid(row=1, column=3, columnspan=2, pady=10, padx=5)
-
-	canvas = FigureCanvasTkAgg(fig, plotFrame)
-
-	plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox)
-
-	figFrame = canvas.get_tk_widget()#.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
-	figFrame.grid(row=1, column=1, columnspan=2, rowspan=3, pady=10, padx=10)
-
-	plotButton = ttk.Button(plotFrame, text="Remove", command = lambda: plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox))
-	plotButton.grid(row=2, column=3, pady=5)
-
-	def goToNextPlot():
-		nonlocal currentFAMESidx
-		if currentFAMESidx+1<len(FAMESselected):
-			currentFAMESidx = currentFAMESidx+1
-			plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox)
-			if currentFAMESidx == len(FAMESselected)-1:
-				plotButton2["text"]="Send"
-		else:
-			plt.close('all')
-			plotFrame.destroy()
-			plotStandardAndSaveResults(appData, useMask=True)
-
-	if currentFAMESidx == len(FAMESselected)-1:
-		textButton = "Send"
-	else:
-		textButton = "Next"
-	plotButton2 = ttk.Button(plotFrame, text=textButton, command = lambda: goToNextPlot())
-	plotButton2.grid(row=2, column=4, pady=5)
-
-	def quitCurrent():
-		plt.close('all')
-		plotFrame.destroy()
-
-	plotButton3 = ttk.Button(plotFrame, text="Quit Inspector", command = quitCurrent)
-	plotButton3.grid(row=3, column=3, columnspan=2, pady=5)
-
-	frameToKill.destroy()
-
-
-def plotIsolatedFAMES(famesName, ax, canvas, pointsListbox):
-	ax.clear()
-
-	ax.set_xlabel("Quantity (nMoles)")
-	ax.set_ylabel("Absorbance")
-
-	carbon,mass = famesName.split(" ")
-	maskSelected = [not (i in pointsListbox.curselection()) for i in range(len(appData["Standard-nMol"][carbon].values))]
-	newMask = [(m1 & m2) for m1,m2 in zip(appData["FAMESnames"][famesName]["originalMask"], maskSelected)]
-	appData["FAMESnames"][famesName]["newMask"] = newMask
-	
-	xvals = appData["Standard-nMol"][carbon].values
-	yvals = appData["Standard-absorbance"][famesName].values
-
-
-	pointsListbox.delete(0, tk.END)
-	for i,(x,y) in enumerate(zip(xvals, yvals)):
-		pointsListbox.insert(tk.END, f" point{i}: ({x:.3f}, {y:.3f})")
-
-	ax.plot(xvals[newMask], yvals[newMask], "o")
-	ax.plot(xvals[[not i for i in newMask]], yvals[[not i for i in newMask]], "or")
-	slope,intercept = np.polyfit(np.array(xvals[newMask], dtype=float), np.array(yvals[newMask], dtype=float), 1)
-	xfit = [np.min(xvals), np.max(xvals)]
-	yfit = np.polyval([slope, intercept], xfit)
-	# plot of data
-	ax.plot(xfit, yfit, "purple")
-	ax.set_title(famesName)
-
-	canvas.draw()
-
+    return result
 
 
 class MSAnalyzer:
-	def __init__(self, faNames, idxInternalRef):
-		self.window = tk.Tk()
-		self.window.title("MS Analyzer")
-		self.create_widgets(faNames, idxInternalRef)
+  def __init__(self, dataObject):
+    self.window = tk.Tk()
+    self.window.title("MS Analyzer")
+    self.dataObject = dataObject
+    self.FANames = dataObject.dataColNames
+    self.internalRef = dataObject.internalRef
+    self.create_widgets()
 
-	def create_widgets(self, faNames, idxInternalRef):
-		# Create some room around all the internal frames
-		self.window['padx'] = 5
-		self.window['pady'] = 5
+  def create_widgets(self):
+    # Create some room around all the internal frames
+    self.window['padx'] = 5
+    self.window['pady'] = 5
 
-		# - - - - - - - - - - - - - - - - - - - - -
-		# The FAMES frame (for internal control)
-		FAMESframe = ttk.LabelFrame(self.window, text="Select the internal control", relief=tk.GROOVE)
-		FAMESframe.grid(row=1, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2)
+    # - - - - - - - - - - - - - - - - - - - - -
+    # The FAMES frame (for internal control)
+    FAMESframe = ttk.LabelFrame(self.window, text="Select the internal control", relief=tk.GROOVE)
+    FAMESframe.grid(row=1, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2)
 
-		FAMESListLabel = tk.Label(FAMESframe, text="FAMES")
-		FAMESListLabel.grid(row=2, column=1, sticky=tk.W + tk.N)
+    FAMESListLabel = tk.Label(FAMESframe, text="FAMES")
+    FAMESListLabel.grid(row=2, column=1, sticky=tk.W + tk.N)
 
-		FAMESLabelCurrent = tk.Label(FAMESframe, text=f"The current internal control is {faNames[idxInternalRef]}", fg="white", bg="#EBB0FF")#bg="#E4E4E4")
-		FAMESLabelCurrent.grid(row=3, column=1, columnspan=2)
+    # by default, choose internal reference defined in dataObject (C14:0)
+    idxInternalRef = [i for i,name in enumerate(self.FANames) if self.dataObject.internalRef in name][0]
 
-		self.FAMESListValue = tk.StringVar()
-		# will update each time that new control is chosen
-		self.FAMESListValue.trace('w', lambda index,value,op : updateInternalRef(FAMESList.get(), FAMESLabelCurrent))
-		FAMESList = ttk.Combobox(FAMESframe, height=6, textvariable=self.FAMESListValue)
-		FAMESList.grid(row=2, column=2, columnspan=2)
-		FAMESList['values'] = faNames
-		FAMESList.current(idxInternalRef)
+    self.FAMESLabelCurrent = tk.Label(FAMESframe, text=f"The current internal control is {self.FANames[idxInternalRef]}", fg="white", bg="#EBB0FF")
+    self.FAMESLabelCurrent.grid(row=3, column=1, columnspan=2)
 
+    self.FAMESListValue = tk.StringVar()
+    self.FAMESListValue.trace('w', lambda index,value,op : self.__updateInternalRef(FAMESList.get()))
+    FAMESList = ttk.Combobox(FAMESframe, height=6, textvariable=self.FAMESListValue)
+    FAMESList.grid(row=2, column=2, columnspan=2)
+    FAMESList['values'] = self.FANames
+    FAMESList.current(idxInternalRef)
 
-		# - - - - - - - - - - - - - - - - - - - - -
-		# The standards frame (for fitting)
-		Standardframe = ttk.LabelFrame(self.window, text="Standards", relief=tk.RIDGE)
-		Standardframe.grid(row=4, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2, pady=6)
-		
-		# Vol mix total
-		self.volTotalVar = tk.IntVar()
-		self.volTotalVar.set(500)
-		volTotalSpinbox = tk.Spinbox(Standardframe, from_=0, to=1000, width=5, textvariable=self.volTotalVar, justify=tk.RIGHT)
-		volTotalSpinbox.grid(row=5, column=2, sticky=tk.W, pady=3)
-		volTotalLabel = tk.Label(Standardframe, text="Vol. Mix Total")
-		volTotalLabel.grid(row=5, column=1, sticky=tk.W)
+    # - - - - - - - - - - - - - - - - - - - - -
+    # The standards frame (for fitting)
+    Standardframe = ttk.LabelFrame(self.window, text="Standards", relief=tk.RIDGE)
+    Standardframe.grid(row=4, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2, pady=6)
+    
+    # variables declaration
+    self.volTotalVar = tk.IntVar()
+    self.volMixVar = tk.IntVar()
+    self.volSampleVar = tk.IntVar()
+    self.stdVols = self.dataObject.volumeStandards
 
-		# Vol mix
-		self.volMixVar = tk.IntVar()
-		self.volMixVar.set(100)
-		volMixSpinbox = tk.Spinbox(Standardframe, from_=0, to=1000, width=5, textvariable=self.volMixVar, justify=tk.RIGHT)
-		volMixSpinbox.grid(row=6, column=2, sticky=tk.W, pady=3)
-		volMixLabel = tk.Label(Standardframe, text="Vol. Mix")
-		volMixLabel.grid(row=6, column=1, sticky=tk.W)
+    self.volTotalVar.set(self.dataObject.volumeMixTotal)
+    self.volMixVar.set(self.dataObject.volumeMixForPrep)
+    self.volSampleVar.set(self.dataObject.volumeSample)
 
-		# Vol sample
-		self.volSampleVar = tk.IntVar()
-		self.volSampleVar.set(150)
-		volSampleSpinbox = tk.Spinbox(Standardframe, from_=0, to=1000, width=5, textvariable=self.volSampleVar, justify=tk.RIGHT)
-		volSampleSpinbox.grid(row=7, column=2, sticky=tk.W, pady=3)
-		volSampleLabel = tk.Label(Standardframe, text="Vol. Sample")
-		volSampleLabel.grid(row=7, column=1, sticky=tk.W)
+    # Vol mix total
+    self.volTotalVar.trace('w', lambda index,value,op : self.__updateVolumeMixTotal(self.volTotalVar.get()))
+    volTotalSpinbox = tk.Spinbox(Standardframe, from_=0, to=1000, width=5, textvariable=self.volTotalVar, command= lambda: self.__updateVolumeMixTotal(self.volTotalVar.get()), justify=tk.RIGHT)
+    volTotalSpinbox.grid(row=5, column=2, sticky=tk.W, pady=3)
+    volTotalLabel = tk.Label(Standardframe, text="Vol. Mix Total")
+    volTotalLabel.grid(row=5, column=1, sticky=tk.W)
 
-		# Standards uL
-		StandardVols = tk.Text(Standardframe, height=7, width=15)
-		StandardVols.grid(row=5, rowspan=3, column=3, padx=20)
-		StandardVols.insert(tk.END, "Standards (ul)\n1\n5\n10\n20\n40\n80\n")
+    # Vol mix
+    self.volMixVar.trace('w', lambda index,value,op : self.__updateVolumeMixForPrep(self.volMixVar.get()))
+    volMixSpinbox = tk.Spinbox(Standardframe, from_=0, to=1000, width=5, textvariable=self.volMixVar, command= lambda: self.__updateVolumeMixForPrep(self.volMixVar.get()), justify=tk.RIGHT)
+    volMixSpinbox.grid(row=6, column=2, sticky=tk.W, pady=3)
+    volMixLabel = tk.Label(Standardframe, text="Vol. Mix")
+    volMixLabel.grid(row=6, column=1, sticky=tk.W)
 
-		# Do fit button
-		StandardButton = ttk.Button(Standardframe, text="Compute results", command=lambda x=1 : fitStandard(StandardVols.get("1.0",tk.END), self.volTotalVar.get(), self.volMixVar.get()))
-		StandardButton.grid(row=8, column=2, columnspan=2, pady=5)
+    # Vol sample
+    self.volSampleVar.trace('w', lambda index,value,op : self.__updateVolumeSample(self.volSampleVar.get()))
+    volSampleSpinbox = tk.Spinbox(Standardframe, from_=0, to=1000, width=5, textvariable=self.volSampleVar, command= lambda: self.__updateVolumeSample(self.volSampleVar.get()), justify=tk.RIGHT)
+    volSampleSpinbox.grid(row=7, column=2, sticky=tk.W, pady=3)
+    volSampleLabel = tk.Label(Standardframe, text="Vol. Sample")
+    volSampleLabel.grid(row=7, column=1, sticky=tk.W)
 
+    # Standards uL
+    StandardVols = CustomText(Standardframe, height=7, width=15)
+    StandardVols.grid(row=5, rowspan=3, column=3, padx=20)
+    StandardVols.insert(tk.END, "Standards (ul)\n"+"".join([f"{vol}\n" for vol in self.stdVols]))
+    StandardVols.bind("<<TextModified>>", self.__updateVolumeStandards)
 
-		# - - - - - - - - - - - - - - - - - - - - -
-		# Quit button in the lower right corner
-		quit_button = ttk.Button(self.window, text="Quit", command=self.window.destroy)
-		quit_button.grid(row=1, column=4)
+    # Compute Results button
+    StandardButton = ttk.Button(Standardframe, text="Compute results", command=lambda: self.computeResults())
+    StandardButton.grid(row=8, column=2, columnspan=2, pady=5)
 
+    # - - - - - - - - - - - - - - - - - - - - -
+    # Quit button in the lower right corner
+    quit_button = ttk.Button(self.window, text="Quit", command=self.window.destroy)
+    quit_button.grid(row=1, column=4)
 
-############################
-## UTILS
-############################
+  def popupMsg(self, msg):
+    '''Popup message window'''
+    popup = tk.Tk()
+    popup.wm_title("Look at the standard plots!")
+    label = ttk.Label(popup, text=msg, font=("Verdana", 14))
+    label.grid(row=1, column=1, columnspan=2, padx=10, pady=10)
+      
+    B1 = ttk.Button(popup, text="Yes", command = lambda: self.inspectPlots(popup))
+    B1.grid(row=2, column=1, pady=10)
 
-def getDataAndTemplateFileNames(fileNames):
-	'''Classify data and template files based on fileName'''
-	dataFileName = [fileName for fileName in fileNames if "template" not in fileName][0]
-	templateFileName = [fileName for fileName in fileNames if fileName != dataFileName][0]
-	return [dataFileName, templateFileName]
+    def quitApp():
+      popup.destroy()
+      app.window.destroy()
 
+    B2 = ttk.Button(popup, text="No", command = quitApp)
+    B2.grid(row=2, column=2, pady=10)
+    popup.mainloop()
 
-def getCleanUpDataFrameFromFile(fileName, keyword="Results"):
-	'''Return a simplified pandas dataFrame'''
-	startIdxCol = 7 # cols before this are just info
-	colNames = pd.read_excel(fileName).filter(regex=f"[A-Z0-9]*{keyword}").columns
-	colNames = list(map(lambda x: renameFAMES(x), colNames))
-	df = pd.read_excel(fileName, skiprows=1)
-	df = pd.concat([df.Name, df["Data File"], df.iloc[:, startIdxCol:]], axis=1)
-	df.columns = np.concatenate([["Name"], ["File"], colNames])
-	return df,colNames
+  def __updateInternalRef(self, newInternalRef):
+    '''Update FAMES chosen as internal reference'''
+    self.dataObject.updateInternalRef(newInternalRef)
+    self.FAMESLabelCurrent.config(text=f"The current internal control is {newInternalRef}")
 
+  def __updateVolumeMixTotal(self, newVolumeMixTotal):
+    self.dataObject.updateStandards(self.volMixVar.get(), newVolumeMixTotal, self.stdVols)
+    print(f"The volumeMixTotal was updated to {newVolumeMixTotal}")
 
-def renameFAMES(name):
-	'''Return a more informative name to column'''
-	codeID,_ = name.split(" ")
-	num,carbon,mass = codeID.split("_")
-	return f"C{carbon[:2]}:{carbon[2:]} ({mass})"
+  def __updateVolumeMixForPrep(self, newVolumeMixForPrep):
+    self.dataObject.updateStandards(newVolumeMixForPrep, self.volTotalVar.get(), self.stdVols)
+    print(f"The volumeMixForPrep was updated to {newVolumeMixForPrep}")
 
+  def __updateVolumeSample(self, newVolumeSample):
+    self.dataObject.volumeSample = newVolumeSample
+    print(f"The volumeSample was updated to {newVolumeSample}")
 
-def updateInternalRef(newInternalRef, label):
-	'''Update FAMES chosen as internal reference and normalize data to it'''
-	print(f"Internal Reference changed from {appData['internalRef']} to {newInternalRef}")
-	appData["internalRef"] = newInternalRef
+  def __updateVolumeStandards(self, event):
+    newStdVols = [float(vol) for vol in re.findall(r"(?<!\d)\d+(?!\d)", event.widget.get("1.0", "end-1c"))]
+    self.stdVols = newStdVols
+    self.dataObject.updateStandards(self.volMixVar.get(), self.volTotalVar.get(), newStdVols)
+    print(f"The volumeStandards have been updated to {newStdVols}")
 
-	label.config(text=f"The current internal control is {newInternalRef}")
+  def computeResults(self):
+    self.dataObject.saveStandardCurvesAndResults()
+    self.popupMsg("The results and plots have been saved.\nCheck out the standard plots.\nDo you want to modify the standards?")
 
-	appData["dataDf_norm"] = appData["dataDf"].copy()
-	appData["dataDf_norm"].iloc[:, 2:] = appData["dataDf_norm"].iloc[:, 2:].values/appData["dataDf_norm"][appData["internalRef"]].values[:, np.newaxis]
-	# print(appData["dataDf_norm"])
-	return
+  def inspectPlots(self, popup):
+    popup.destroy()
+        
+    selectFrame = tk.Tk()
+    selectFrame.wm_title("FAMES standard to modify")
+    label = ttk.Label(selectFrame, text="Select the FAMES standard to modify", font=("Verdana", 14))
+    label.grid(row=1, column=1, columnspan=2, padx=10, pady=10)
 
+    FAMESlistbox = tk.Listbox(selectFrame, height=10, selectmode='multiple')
+    for item in self.dataObject._maskFAMES.keys():
+      FAMESlistbox.insert(tk.END, item)
+    FAMESlistbox.grid(row=2, column=1, columnspan=2, pady=10)
 
-def fitStandard(StandardText, volMixTotal, volMix):
-	stdVols = getStandardVolumeFromText(StandardText)#np.array([vol for vol in StandardText.strip().split("\n")][1:], dtype=float)
-	appData["Standard-nMol"] = getStandardMoles(appData["templateFileName"], stdVols, volMix, volMixTotal, sheet_name="STANDARD")
-	appData["Standard-absorbance"] = getSampleMap(appData["templateFileName"], sheet_name="MAP")
-	plotStandardAndSaveResults(appData)
-	# print(dataStandard)
+    FAMESbutton = ttk.Button(selectFrame, text="Select", command = lambda: self.modifySelection(selectFrame, FAMESlistbox))
+    FAMESbutton.grid(row=3, column=1, columnspan=2, pady=10)
 
-def getStandardVolumeFromText(StandardText):
-	'''Extract volumes of standards from text'''
-	return np.array([vol for vol in StandardText.strip().split("\n")][1:], dtype=float)
+  def modifySelection(self, frameToKill, selection):
+    FAMESselected = [selection.get(i) for i in selection.curselection()]
 
+    # will go over all the selectedFAMES
+    currentFAMESidx = 0
 
-def getStandardMoles(fileName, stdVols, volMix, volMixTotal, sheet_name="STANDARD"):
-	'''Calculate nMoles for the standards'''
-	template = pd.read_excel(fileName, sheet_name=sheet_name)
-	template["Conc in Master Mix (ug/ul)"] = template["Stock conc (ug/ul)"]*template["Weight (%)"]/100*float(volMix)/float(volMixTotal)
-	# concentration of each carbon per standard volume
-	for ul in stdVols:
-		template[f"Std-Conc-{ul}"]=ul*(template["Conc in Master Mix (ug/ul)"]+template["Extra"])
-	# nMol of each fa per standard vol
-	for ul in stdVols:
-		template[f"Std-nMol-{ul}"] = 1000*template[f"Std-Conc-{ul}"]/template["MW"]
-	# create a clean template with only masses and carbon name
-	templateClean = pd.concat([template.Chain, template.filter(regex="Std-nMol")], axis=1).transpose()
-	templateClean.columns = list(map(lambda x: "C"+x, templateClean.iloc[0]))
-	templateClean = templateClean.iloc[1:]
-	return templateClean
+    fig,ax = plt.subplots(figsize=(4,3))
+    ax.set_xlabel("Quantity (nMoles)")
+    ax.set_ylabel("Absorbance")
+    fig.tight_layout()
 
+    plotFrame = tk.Tk()
+    plotFrame.wm_title("Standard curve inspector")
 
-def getSampleMap(fileName, sheet_name="MAP"):
-	templateMap = pd.read_excel(fileName, sheet_name=sheet_name)
-	declaredIdx = templateMap.SampleName.dropna().index
-	templateMap = templateMap.loc[declaredIdx]
-	# fill in missing weights with 1
-	templateMap.loc[templateMap.SampleWeight.isna(), "SampleWeight"]=1
+    pointsListbox = tk.Listbox(plotFrame, height=8, selectmode='multiple')
+    pointsListbox.grid(row=1, column=3, columnspan=2, pady=10, padx=5)
 
-	#Add column to dataDf_norm with the sample ID defined in the MAP file
-	addIDsampleToDataDf(templateMap)
+    canvas = FigureCanvasTkAgg(fig, plotFrame)
 
-	# index of standards (they will be named S1, S5, etc ...)
-	stdIdx = templateMap["SampleName"].loc[templateMap["SampleName"].str.match('S[0-9]+')>0].index
+    self.plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox)
 
-	# get the num of the mass spec cell ID (MS_num) that are holding the standards
-	cellStd = templateMap.iloc[stdIdx].SampleID.apply(lambda x: x.split("_")[1])
+    figFrame = canvas.get_tk_widget()#.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
+    figFrame.grid(row=1, column=1, columnspan=2, rowspan=3, pady=10, padx=10)
 
-	# get corresponding data for which the Name (F..) matches the Standards cell ID
-	dataStandard = appData["dataDf_norm"].loc[[x for x in range(len(appData["dataDf_norm"])) if appData["dataDf_norm"].Name.apply(lambda x: x.split("F")[1]).loc[x] in cellStd.values]]
-	dataStandard["IDsample"]=templateMap.loc[stdIdx,"SampleName"].values
-	return dataStandard
+    plotButton = ttk.Button(plotFrame, text="Remove", command = lambda: self.plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox))
+    plotButton.grid(row=2, column=3, pady=5)
 
-def addIDsampleToDataDf(templateMap):
-	'''Add column to dataDf_norm with the sample ID defined in the MAP file'''
-	appData["dataDf_norm"]["IDsample"] = " "
-	for id,sample in templateMap.loc[:, ["SampleID", "SampleName"]].values:
-		idNum = id.split("_")[1]
-		appData["dataDf_norm"].loc[[x for x in range(len(appData["dataDf_norm"])) if appData["dataDf_norm"].Name.apply(lambda x: x.split("F")[1]).loc[x] == idNum], "IDsample"] = sample
+    def goToNextPlot():
+      nonlocal currentFAMESidx
+      if currentFAMESidx+1<len(FAMESselected):
+        currentFAMESidx = currentFAMESidx+1
+        self.plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox)
+        if currentFAMESidx == len(FAMESselected)-1:
+          plotButton2["text"]="Send"
+      else:
+        plt.close('all')
+        plotFrame.destroy()
+        self.dataObject.saveStandardCurvesAndResults(useMask=True)
+        self.popupMsg("The results and plots have been saved.\nCheck out the standard plots.\nDo you want to modify the standards?")
 
-	# add each sample weights for later normalization
-	appData["dataDf_norm"]["SampleWeight"] = templateMap.SampleWeight
+    if currentFAMESidx == len(FAMESselected)-1:
+      textButton = "Send"
+    else:
+      textButton = "Next"
+    plotButton2 = ttk.Button(plotFrame, text=textButton, command = lambda: goToNextPlot())
+    plotButton2.grid(row=2, column=4, pady=5)
 
-	# reorder rows based on template and reindex with range
-	newOrder = list(map(lambda x: f"F{x.split('_')[1]}", templateMap.SampleID.values))
-	appData["dataDf_norm"].index=appData["dataDf_norm"]["Name"]
-	appData["dataDf_norm"] = appData["dataDf_norm"].reindex(newOrder)
-	appData["dataDf_norm"].index = list(range(len(appData["dataDf_norm"])))
-	appData["dataDf_norm"]["MSsample"] = templateMap["SampleID"]
+    def quitCurrent():
+      plt.close('all')
+      plotFrame.destroy()
 
+    plotButton3 = ttk.Button(plotFrame, text="Quit Inspector", command = quitCurrent)
+    plotButton3.grid(row=3, column=3, columnspan=2, pady=5)
 
-def plotStandardAndSaveResults(appData, useMask=False):
-	# get current folder and create result folder if needed
-	savePath = makeResultFolder()
-	
-	# will store final results
-	resultsDf = pd.DataFrame(index=appData["dataDf_norm"].index)
-
-	# Plot of Standard
-	nTotal = len(appData["Standard-absorbance"].filter(regex="C").columns)
-	nCols = 4
-	if nTotal%4==0:
-		nRows = int(nTotal/nCols)
-	else:
-		nRows = int(np.floor(nTotal/nCols)+1)
-
-	fig1,axes = plt.subplots(ncols=nCols, nrows=nRows, figsize=(20, nRows*4))
-
-	if not useMask:
-		appData["FAMESnames"] = {}
-		extension = ""
-	else:
-		extension = "_modified"
-
-	for i,(col,ax) in enumerate(zip(appData["Standard-absorbance"].filter(regex="C").columns,  axes.ravel())):
-		carbon,mass = col.split(" ")
-		if carbon in appData["Standard-nMol"].columns:
-			# fit of data
-			xvals = appData["Standard-nMol"][carbon].values
-			yvals = appData["Standard-absorbance"][col].values
-			
-			if not useMask:
-				mask = [~np.logical_or(np.isnan(x), np.isnan(y)) for x,y in zip(xvals, yvals)]
-				# add carbon to valid standard FAMES and save mask
-				appData["FAMESnames"][col] = {"originalMask": mask}
-			else:
-				try:
-					mask = appData["FAMESnames"][col]["newMask"]
-				except:
-					mask = appData["FAMESnames"][col]["originalMask"]
-
-			slope,intercept = np.polyfit(np.array(xvals[mask], dtype=float), np.array(yvals[mask], dtype=float), 1)
-			xfit = [np.min(xvals), np.max(xvals)]
-			yfit = np.polyval([slope, intercept], xfit)
-			# plot of data
-			ax.plot(xvals[mask], yvals[mask], "o")
-			ax.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "o", mfc="none", color="black", mew=2)
-			ax.plot(xfit, yfit, "red")
-			ax.text(ax.get_xlim()[0]+(ax.get_xlim()[1]-ax.get_xlim()[0])*0.05, ax.get_ylim()[0]+(ax.get_ylim()[1]-ax.get_ylim()[0])*0.9, f"R2={stats.pearsonr(xvals[mask], yvals[mask])[0]**2:.4f}", size=14, color="purple")
-			ax.text(ax.get_xlim()[0]+(ax.get_xlim()[1]-ax.get_xlim()[0])*0.97, ax.get_ylim()[0]+(ax.get_ylim()[1]-ax.get_ylim()[0])*0.05, f"y={slope:.4f}x+{intercept:.4f}", size=14, color="red", ha="right")
-			# calculate final results and save
-			resultsDf[col] = ((appData["dataDf_norm"][col]-intercept)/slope)/appData["dataDf_norm"]["SampleWeight"]
-		ax.set_title(col)
-		ax.set_xlabel("Quantity (nMoles)")
-		ax.set_ylabel("Absorbance")
-
-	fig1.tight_layout()
-
-	# Plot of results on standard curves
-	nTotal = len(resultsDf.filter(regex="C").columns)
-	nCols = 4
-	if nTotal%4==0:
-		nRows = int(nTotal/nCols)
-	else:
-		nRows = int(np.floor(nTotal/nCols)+1)
-
-	fig2,axes = plt.subplots(ncols=nCols, nrows=nRows, figsize=(20, nRows*4))
-
-	for i,(col,ax) in enumerate(zip(resultsDf.filter(regex="C").columns,  axes.ravel())):
-		carbon,mass = col.split(" ")
-		if carbon in appData["Standard-nMol"].columns:
-			# fit of data
-			xvals = appData["Standard-nMol"][carbon].values
-			yvals = appData["Standard-absorbance"][col].values
-			try:
-				mask = appData["FAMESnames"][col]["newMask"]
-			except:
-				mask = appData["FAMESnames"][col]["originalMask"]
-			# mask = [~np.logical_or(np.isnan(x), np.isnan(y)) for x,y in zip(xvals, yvals)]
-			slope,intercept = np.polyfit(np.array(xvals[mask], dtype=float), np.array(yvals[mask], dtype=float), 1)
-			xfit = [np.min(xvals), np.max(xvals)]
-			yfit = np.polyval([slope, intercept], xfit)
-			# plot of data	
-			ax.plot(xvals[mask], yvals[mask], "o")
-			ax.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "x", color="black", ms=3)
-			ax.plot(xfit, yfit, "red")
-			# plot values calculated from curve
-			ax.plot(resultsDf[col], appData["dataDf_norm"][col], "o", alpha=0.3)
-		ax.set_title(col)
-		ax.set_xlabel("Quantity (nMoles)")
-		ax.set_ylabel("Absorbance")
-
-	fig2.tight_layout()
-	
-	# Save data
-	resultsDf["IDsample"]=appData["dataDf_norm"]["IDsample"]
-	resultsDf["MSsample"]=appData["dataDf_norm"]["MSsample"]
-	resultsDf = resultsDf[np.concatenate([["MSsample", "IDsample"], np.array(resultsDf.filter(regex="C").columns)])]
-	resultsDf.to_excel(f"{savePath}/results{extension}.xls", index=False)
-	fig1.savefig(f"{savePath}/standard-fit{extension}.pdf")
-	fig2.savefig(f"{savePath}/standard-fit-with-data{extension}.pdf")
-	
-	print(f"The standard plots have been saved at {savePath}/standard-fit{extension}.pdf")
-	print(f"The results calculated from the standard regression lines have been saved at {savePath}/standard-fit-with-data{extension}.pdf")
-	print(f"The analysis results have been saved at {savePath}/results{extension}.xls")
-
-	
-	# close Matplotlib processes
-	plt.close('all')
-
-	popupMsg("The results and plots have been saved.\nCheck out the standard plots.\nDo you want to modify the standards?")
+    frameToKill.destroy()
 
 
-def makeResultFolder():
-	directory = f"{appData['pathDirName']}/results"
-	if not os.path.exists(directory):
-		os.mkdir(directory)
-	return directory
+  def plotIsolatedFAMES(self, famesName, ax, canvas, pointsListbox):
+    ax.clear()
+
+    ax.set_xlabel("Quantity (nMoles)")
+    ax.set_ylabel("Absorbance")
+
+    carbon = re.findall(r"(C\d+:\d+)", famesName)[0]
+    maskSelected = [not (i in pointsListbox.curselection()) for i in range(len(self.dataObject.standardDf_nMoles[carbon].values))]
+    newMask = [(m1 & m2) for m1,m2 in zip(self.dataObject._maskFAMES[famesName]["originalMask"], maskSelected)]
+    self.dataObject._maskFAMES[famesName]["newMask"] = newMask
+    
+    xvals = self.dataObject.standardDf_nMoles[carbon].values
+    yvals = self.dataObject.getStandardAbsorbance()[famesName].values
+
+    pointsListbox.delete(0, tk.END)
+    for i,(x,y) in enumerate(zip(xvals, yvals)):
+      pointsListbox.insert(tk.END, f" point{i}: ({x:.3f}, {y:.3f})")
+
+    ax.plot(xvals[newMask], yvals[newMask], "o")
+    ax.plot(xvals[[not i for i in newMask]], yvals[[not i for i in newMask]], "or")
+    slope,intercept = np.polyfit(np.array(xvals[newMask], dtype=float), np.array(yvals[newMask], dtype=float), 1)
+    xfit = [np.min(xvals), np.max(xvals)]
+    yfit = np.polyval([slope, intercept], xfit)
+    # plot of data
+    ax.plot(xfit, yfit, "purple")
+    ax.set_title(famesName)
+
+    canvas.draw()
 
 
 ############################
@@ -471,35 +580,35 @@ def makeResultFolder():
 
 if __name__ == '__main__':
 
-	appData = {
-		"internalRef": "C19:0"
-	}
-	
-	# Directory to look for data files defined?
-	if len(sys.argv) == 1: # no arguments given to the function
-		initialDirectory = False
-	else:
-		initialDirectory = sys.argv[1]
+  # Is the directory to look in for data files defined?
+  if len(sys.argv) == 1: # no arguments given to the function
+    initialDirectory = False
+  else:
+    initialDirectory = sys.argv[1]
 
-	# Choose data and template files
-	fileNames = initialFileChoser(initialDirectory)
-	appData["dataFileName"],appData["templateFileName"] = getDataAndTemplateFileNames(fileNames)
-	appData["pathDirName"] = os.path.dirname(appData["dataFileName"])
-	print(f"Path of working directory: {appData['pathDirName']}")
-	print(f"Data file: {appData['dataFileName']}")
-	print(f"Template file: {appData['templateFileName']}")
+  # Choose data and template files
+  fileNames = initialFileChoser(initialDirectory)
 
-	# import data file and clean up
-	appData["dataDf"],dataColNames = getCleanUpDataFrameFromFile(appData["dataFileName"], keyword="Results")
 
-	# by default, choose C14:0 as internal reference
-	idxInternalRef = [i for i,name in enumerate(dataColNames) if appData["internalRef"] in name][0]
+  # The container that will hold all the data
+  appData = MSDataContainer(fileNames)
 
-	# Create the entire GUI program and pass in colNames for popup menu
-	app = MSAnalyzer(dataColNames, idxInternalRef)
+  print(f"""Two files have been loaded:
+    \tData file: {appData.dataFileName}
+    \tTemplate file: {appData.templateFileName}""")
+  print(f"The experiment type detected is '{appData.experimentType}'")
 
-	# Start the GUI event loop
-	app.window.mainloop()
 
+  # Create the entire GUI program and pass in colNames for popup menu
+  app = MSAnalyzer(appData)
+
+  # Start the GUI event loop
+  app.window.mainloop()
+
+
+  # print(appData.volumeMixTotal, appData.volumeMixForPrep, appData.volumeSample)
+  # print(appData.volumeStandards)
+
+  # print(appData.standardDf_nMoles)
 
 
