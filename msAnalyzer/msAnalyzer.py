@@ -1,3 +1,6 @@
+# Author: Guillaume Calmettes
+# University of Los Angeles California
+
 import os
 import sys
 import re
@@ -16,9 +19,9 @@ import scipy.stats as stats
 
 
 
-############################
-## Data object
-############################
+#############################################################################
+# --------- DATA OBJECT CLASS ----------------------------------------------#
+#############################################################################
 
 class MSDataContainer:
 
@@ -26,9 +29,10 @@ class MSDataContainer:
   ## Init and setup
   ##################
 
-  def __init__(self, fileNames, internalRef="C19:0"):
+  def __init__(self, fileNames, internalRef="C19:0", nauralAbundanceCorrectionMethod="Control"):
     assert len(fileNames)==2 , "You must choose 2 files!"
     self.internalRef = internalRef
+    self.naturalAbundanceCorrection = nauralAbundanceCorrectionMethod
     self.dataFileName, self.templateFileName = self.__getDataAndTemplateFileNames(fileNames)
     self.pathDirName = os.path.dirname(self.dataFileName)
     self.__regexExpression = {"NotLabeled": "([0-9]+)_([0-9]+)_([0-9]+)",
@@ -42,6 +46,15 @@ class MSDataContainer:
     self.volumeStandards = [1, 5, 10, 20, 40, 80]
 
     self.standardDf_nMoles = self.computeStandardMoles()
+
+    self.__isotopesToCorrect = {
+        'hydrogen': False,
+        'carbon':   True,
+        'nitrogen': False,
+        'oxygen':   True,
+        'silicon':  True,
+        'sulphur':  False}
+
 
   def __getDataAndTemplateFileNames(self, fileNames, templateKeyword="template"):
     '''Classify files (data or template) based on fileName'''
@@ -122,7 +135,7 @@ class MSDataContainer:
     templateMap = templateMap.loc[declaredIdx]
     # fill in missing weights with 1
     templateMap.loc[templateMap.SampleWeight.isna(), "SampleWeight"]=1
-    return templateMap[["SampleID", "SampleName", "SampleWeight", "Code", "Comments"]]
+    return templateMap[["SampleID", "SampleName", "SampleWeight", "LabeledCode", "Comments"]]
 
   def __getStandardsTemplateDf(self, sheetKeyword="STANDARD"):
     sheetName = f"{sheetKeyword}_{'_'.join(self.experimentType.upper().split(' '))}"
@@ -134,6 +147,23 @@ class MSDataContainer:
     if not os.path.exists(directory):
       os.mkdir(directory)
     return directory
+
+  def __getNaturalAbundanceDistributions(self):
+    '''Return a dictionary of the isotopic proportions at natural abundance 
+    desribed in https://www.ncbi.nlm.nih.gov/pubmed/27989585'''
+    H1, H2 = 0.999885, 0.000115
+    C12, C13 = 0.9893, 0.0107
+    N14, N15 = 0.99632, 0.00368
+    O16, O17, O18 = 0.99757, 0.00038, 0.00205
+    Si28, Si29, Si30 = 0.922297, 0.046832, 0.030872
+    S32, S33, S34, S36 = 0.9493, 0.0076, 0.0429, 0.0002
+
+    return {'hydrogen': np.array([H1, H2]),
+            'carbon':   np.array([C12, C13]),
+            'nitrogen': np.array([N14, N15]),
+            'oxygen':   np.array([O16, O17, O18]),
+            'silicon':  np.array([Si28, Si29, Si30]),
+            'sulphur':  np.array([S32, S33, S34, S36])}
 
   ##################
   ## Analysis and Updates
@@ -172,11 +202,20 @@ class MSDataContainer:
     return self.dataDf_norm.loc[self.dataDf_norm.SampleName.str.match('S[0-9]+')]
 
 
+  def updateNaturalAbundanceCorrection(self, newMethod):
+    self.naturalAbundanceCorrection = newMethod
+    print(f"The method for Natural Abundance Correction has been updated to {newMethod}")
+    self.correctForNaturalAbundance()
+
+
   def computeNormalizedData(self):
     '''Normalize the data to the internal ref'''
     dataDf_norm = self.dataDf.copy()
     dataDf_norm.iloc[:, 7:] = dataDf_norm.iloc[:, 7:].values/dataDf_norm[self.internalRef].values[:, np.newaxis]
     return dataDf_norm
+
+  def correctForNaturalAbundance(self):
+    print(f"{self.naturalAbundanceCorrection} executed")
 
   def saveStandardCurvesAndResults(self, useMask=False):
     # get current folder and create result folder if needed
@@ -280,7 +319,18 @@ class MSDataContainer:
     resultsDf["SampleName"]=self.dataDf_norm["SampleName"]
     resultsDf["Comments"]=self.dataDf_norm["Comments"]
     resultsDf = resultsDf[np.concatenate([["SampleID", "SampleName", "Comments"], np.array(resultsDf.filter(regex="C[0-9]").columns)])]
-    resultsDf.to_excel(f"{savePath}/results{extension}.xls", index=False)
+        
+    # Create a Pandas Excel writer using XlsxWriter as the engine.
+    writer = pd.ExcelWriter(f"{savePath}/results{extension}.xlsx", engine='xlsxwriter')
+
+    # Write each dataframe to a different worksheet.
+    resultsDf.to_excel(writer, sheet_name='Results', index=False)
+    self.dataDf.to_excel(writer, sheet_name='Initial Data', index=False)
+    self.dataDf_norm.to_excel(writer, sheet_name='Normalized Data', index=False)
+
+    # Close the Pandas Excel writer and output the Excel file.
+    writer.save()
+
     fig1.savefig(f"{savePath}/standard-fit{extension}.pdf")
     fig2.savefig(f"{savePath}/standard-fit-with-data{extension}.pdf")
     
@@ -294,9 +344,9 @@ class MSDataContainer:
 
 
 
-############################
-## GUI
-############################
+#############################################################################
+# --------- GRAPHICAL USER INTERFACE ---------------------------------------#
+#############################################################################
 
 def initialFileChoser(directory=False):
   '''Temporary app window to get filenames before building main app'''
@@ -422,9 +472,25 @@ class MSAnalyzer:
     StandardButton.grid(row=8, column=2, columnspan=2, pady=5)
 
     # - - - - - - - - - - - - - - - - - - - - -
-    # Quit button in the lower right corner
+    # Quit button in the upper right corner
     quit_button = ttk.Button(self.window, text="Quit", command=self.window.destroy)
     quit_button.grid(row=1, column=4)
+
+    # - - - - - - - - - - - - - - - - - - - - -
+    # The Labeled Correction choice frame 
+    Correctionframe = ttk.LabelFrame(self.window, text="Natural Abundance Correction", relief=tk.RIDGE)
+    Correctionframe.grid(row=9, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2, pady=6)
+
+    self.radioCorrectionVariable = tk.StringVar()
+    self.radioCorrectionVariable.set("Control")
+    self.radioCorrectionVariable.trace('w', lambda index,value,op : self.__updateNaturalAbundanceCorrectionMethod(self.radioCorrectionVariable.get()))
+    radiobutton1 = ttk.Radiobutton(Correctionframe, text="Control",
+                                   variable=self.radioCorrectionVariable, value="Control")
+    radiobutton2 = ttk.Radiobutton(Correctionframe, text="Theoretical",
+                                   variable=self.radioCorrectionVariable, value="Theoretical")
+    radiobutton1.grid(row=10, column=1, sticky=tk.W)
+    radiobutton2.grid(row=10, column=2 , sticky=tk.W)
+  
 
   def popupMsg(self, msg):
     '''Popup message window'''
@@ -451,21 +517,24 @@ class MSAnalyzer:
 
   def __updateVolumeMixTotal(self, newVolumeMixTotal):
     self.dataObject.updateStandards(self.volMixVar.get(), newVolumeMixTotal, self.stdVols)
-    print(f"The volumeMixTotal was updated to {newVolumeMixTotal}")
+    print(f"The volumeMixTotal has been updated to {newVolumeMixTotal}")
 
   def __updateVolumeMixForPrep(self, newVolumeMixForPrep):
     self.dataObject.updateStandards(newVolumeMixForPrep, self.volTotalVar.get(), self.stdVols)
-    print(f"The volumeMixForPrep was updated to {newVolumeMixForPrep}")
+    print(f"The volumeMixForPrep has been updated to {newVolumeMixForPrep}")
 
   def __updateVolumeSample(self, newVolumeSample):
     self.dataObject.volumeSample = newVolumeSample
-    print(f"The volumeSample was updated to {newVolumeSample}")
+    print(f"The volumeSample has been updated to {newVolumeSample}")
 
   def __updateVolumeStandards(self, event):
     newStdVols = [float(vol) for vol in re.findall(r"(?<!\d)\d+(?!\d)", event.widget.get("1.0", "end-1c"))]
     self.stdVols = newStdVols
     self.dataObject.updateStandards(self.volMixVar.get(), self.volTotalVar.get(), newStdVols)
     print(f"The volumeStandards have been updated to {newStdVols}")
+
+  def __updateNaturalAbundanceCorrectionMethod(self, newMethod):
+    self.dataObject.updateNaturalAbundanceCorrection(newMethod)
 
   def computeResults(self):
     self.dataObject.saveStandardCurvesAndResults()
@@ -609,6 +678,6 @@ if __name__ == '__main__':
   # print(appData.volumeMixTotal, appData.volumeMixForPrep, appData.volumeSample)
   # print(appData.volumeStandards)
 
-  # print(appData.standardDf_nMoles)
+  appData.dataDf.to_excel("test.xlsx")
 
 
