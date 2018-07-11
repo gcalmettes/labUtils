@@ -15,7 +15,181 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
+from scipy import optimize
+from multiprocessing import Pool
 
+#############################################################################
+# --------- Natural Abundance Correction CLASS -----------------------------#
+#############################################################################
+
+class NAProcess:
+  
+  ##################
+  ## Init and setup
+  ##################
+
+  def __init__(self, entry, atomTracer, FAMES=True, purityTracer=[0., 1.]):
+    self.NaturalAbundanceDistributions = self.__getNaturalAbundanceDistributions()
+    self.formula = self.getFAFormulaString(entry, FAMES)
+    self.elementsDict = self.parseFormula(self.formula)
+    self.atomTracer = atomTracer
+    self.purityTracer = purityTracer
+    self.correctionMatrix = self.computeCorrectionMatrix(self.elementsDict, self.atomTracer, self.NaturalAbundanceDistributions, purityTracer)
+    
+  def getFAFormulaString(self, entry, FAMES):
+    ''' Return formula string e.g.: C3H2O3'''
+    regex = "C([0-9]+):([0-9]+)"
+    carbon,doubleBond = [int(val) for val in re.findall(regex, entry)[0]]
+    hydrogen = 3+(carbon-2)*2+1-2*doubleBond
+    oxygen = 2
+    if (FAMES):
+      carbon=carbon+1
+      hydrogen=hydrogen-1+3
+    return "".join(["".join([letter,str(n)]) for [letter,n] in [
+              ["C", carbon], 
+              ["H", hydrogen],
+              ["O", oxygen]] if n>0])
+
+  def parseFormula(self, formula):
+    """
+    Parse the elemental formula and return the number
+    of each element in a dictionnary d={'El_1':x,'El_2':y,...}.
+    """
+    regex = f"({'|'.join(self.NaturalAbundanceDistributions.keys())})([0-9]{{0,}})"
+    elementDict = dict((element, 0) for element in self.NaturalAbundanceDistributions.keys())
+    for element,n in re.findall(regex, formula):
+      if n:
+        elementDict[element] += int(n)
+      else:
+        elementDict[element] += 1
+    return elementDict
+
+  def __getNaturalAbundanceDistributions(self):
+    '''Return a dictionary of the isotopic proportions at natural abundance 
+    desribed in https://www.ncbi.nlm.nih.gov/pubmed/27989585'''
+    H1, H2 = 0.999885, 0.000115
+    C12, C13 = 0.9893, 0.0107
+    N14, N15 = 0.99632, 0.00368
+    O16, O17, O18 = 0.99757, 0.00038, 0.00205
+    Si28, Si29, Si30 = 0.922297, 0.046832, 0.030872
+    S32, S33, S34, S36 = 0.9493, 0.0076, 0.0429, 0.0002
+
+    return {'H': np.array([H1, H2]), # hydrogen
+            'C': np.array([C12, C13]), # carbon
+            'N': np.array([N14, N15]), # nitrogen
+            'O': np.array([O16, O17, O18]), # oxygen
+            'Si': np.array([Si28, Si29, Si30]), # silicon
+            'S': np.array([S32, S33, S34, S36])} # sulphur
+
+  # Adapted from IsoCor code
+  def __calculateMassDistributionVector(self, elementDict, atomTracer, NADistributions):
+    """
+    Calculate a mass distribution vector (at natural abundancy),
+    based on the elemental compositions of metabolite.
+    The element corresponding to the isotopic tracer is not taken
+    into account in the metabolite moiety.
+    """
+    result = np.array([1.])
+    for atom,n in elementDict.items():
+      if atom not in [atomTracer]:
+        for i in range(n):
+          result = np.convolve(result, NADistributions[atom])
+    return result
+
+  def computeCorrectionMatrix(self, elementDict, atomTracer, NADistributions, purityTracer):
+    # calculate correction vector used for correction matrix construction
+    # it corresponds to the mdv at natural abundance of all elements except the
+    # isotopic tracer
+    correctionVector = self.__calculateMassDistributionVector(elementDict, atomTracer, NADistributions)
+
+    # check if the isotopic tracer is present in formula
+    try:
+      nAtomTracer =  elementDict[atomTracer]
+    except: 
+      print("The isotopic tracer must to be present in the metabolite formula!")
+
+    tracerNADistribution =  NADistributions[atomTracer]
+
+    m = 1+nAtomTracer*(len(tracerNADistribution)-1)
+    c = len(correctionVector)
+
+    if m > c + nAtomTracer*(len(tracerNADistribution)-1):
+      print("There might be a problem in matrix size.\nFragment does not contains enough atoms to generate this isotopic cluster.")
+
+    if c < m:
+      # padd with zeros
+      correctionVector.resize(m)
+
+    # create correction matrix
+    correctionMatrix = np.zeros((m, nAtomTracer+1))
+    for i in range(nAtomTracer+1):
+      column = correctionVector[:m]
+      for na in range(i):
+        column = np.convolve(column, purityTracer)[:m]
+
+      for nb in range(nAtomTracer-i):
+        column = np.convolve(column, tracerNADistribution)[:m]                    
+      correctionMatrix[:,i] = column
+    return correctionMatrix
+
+  ##################
+  ## Data processing
+  ##################
+
+  def _computeCost(self, currentMID, target, correctionMatrix):
+    """
+    Cost function used for BFGS minimization.
+        return : (sum(target - correctionMatrix * currentMID)^2, gradient)
+    """
+    difference = target - np.dot(correctionMatrix, currentMID)
+    # calculate sum of square differences and gradient
+    return (np.dot(difference, difference), np.dot(correctionMatrix.transpose(), difference)*-2)
+
+  def _minimizeCost(self, args):
+    '''
+    Wrapper to perform least-squares optimization via the limited-memory 
+    Broyden-Fletcher-Goldfarb-Shanno algorithm, with an explicit lower boundary
+    set to zero to eliminate any potential negative fractions.
+    '''
+    costFunction, initialMID, target, correctionMatrix = args
+    res = optimize.minimize(costFunction, initialMID, jac=True, args=(target, correctionMatrix), 
+                            method='L-BFGS-B', bounds=[(0., float('inf'))]*len(initialMID))
+    return res
+
+  def correctForNaturalAbundance(self, dataFrame, method="LSC"):
+    '''
+    Correct the Mass Isotope Distributions (MID) from a given dataFrame.
+    Method: SMC (skewed Matrix correction) / LSC (Least Squares Skewed Correction)
+    '''
+    correctionMatrix = self.computeCorrectionMatrix(self.elementsDict, self.atomTracer, self.NaturalAbundanceDistributions, self.purityTracer)
+    nRows, nCols = correctionMatrix.shape
+
+    # ensure compatible sizes (will extend data)
+    if nCols<dataFrame.shape[1]:
+      print("The measure MID has more clusters than the correction matrix.")
+    else:
+      dfData = np.zeros((len(dataFrame), nCols))
+      dfData[:dataFrame.shape[0], :dataFrame.shape[1]] = dataFrame.values
+
+    if method == "SMC":
+      # will mltiply the data by inverse of the correction matrix
+      correctionMatrix = np.linalg.pinv(correctionMatrix)
+      correctedData = np.matmul(dfData, correctionMatrix.transpose())
+      # flatten unrealistic negative values to zero
+      correctedData[correctedData<0] = 0
+
+    elif method == "LSC":
+      # Prepare multiprocessing optimization
+      targetMIDList = dfData.tolist()
+      initialMID = np.zeros_like(targetMIDList[0])
+      argsList = [(self._computeCost, initialMID, targetMID, correctionMatrix) for targetMID in targetMIDList]
+
+      # Lauch 4 parrallel processes
+      processes = Pool(4)
+      allRes = processes.map(self._minimizeCost, argsList)
+      correctedData = np.vstack([res.x for res in allRes])
+
+    return pd.DataFrame(columns=dataFrame.columns, data=correctedData[:, :dataFrame.shape[1]])
 
 
 
@@ -29,10 +203,10 @@ class MSDataContainer:
   ## Init and setup
   ##################
 
-  def __init__(self, fileNames, internalRef="C19:0", nauralAbundanceCorrectionMethod="Control"):
+  def __init__(self, fileNames, internalRef="C19:0", tracer="C"):
     assert len(fileNames)==2 , "You must choose 2 files!"
     self.internalRef = internalRef
-    self.naturalAbundanceCorrection = nauralAbundanceCorrectionMethod
+    self.tracer = tracer
     self.dataFileName, self.templateFileName = self.__getDataAndTemplateFileNames(fileNames)
     self.pathDirName = os.path.dirname(self.dataFileName)
     self.__regexExpression = {"NotLabeled": "([0-9]+)_([0-9]+)_([0-9]+)",
@@ -46,14 +220,6 @@ class MSDataContainer:
     self.volumeStandards = [1, 5, 10, 20, 40, 80]
 
     self.standardDf_nMoles = self.computeStandardMoles()
-
-    self.__isotopesToCorrect = {
-        'hydrogen': False,
-        'carbon':   True,
-        'nitrogen': False,
-        'oxygen':   True,
-        'silicon':  True,
-        'sulphur':  False}
 
 
   def __getDataAndTemplateFileNames(self, fileNames, templateKeyword="template"):
@@ -148,22 +314,6 @@ class MSDataContainer:
       os.mkdir(directory)
     return directory
 
-  def __getNaturalAbundanceDistributions(self):
-    '''Return a dictionary of the isotopic proportions at natural abundance 
-    desribed in https://www.ncbi.nlm.nih.gov/pubmed/27989585'''
-    H1, H2 = 0.999885, 0.000115
-    C12, C13 = 0.9893, 0.0107
-    N14, N15 = 0.99632, 0.00368
-    O16, O17, O18 = 0.99757, 0.00038, 0.00205
-    Si28, Si29, Si30 = 0.922297, 0.046832, 0.030872
-    S32, S33, S34, S36 = 0.9493, 0.0076, 0.0429, 0.0002
-
-    return {'hydrogen': np.array([H1, H2]),
-            'carbon':   np.array([C12, C13]),
-            'nitrogen': np.array([N14, N15]),
-            'oxygen':   np.array([O16, O17, O18]),
-            'silicon':  np.array([Si28, Si29, Si30]),
-            'sulphur':  np.array([S32, S33, S34, S36])}
 
   ##################
   ## Analysis and Updates
@@ -202,9 +352,9 @@ class MSDataContainer:
     return self.dataDf_norm.loc[self.dataDf_norm.SampleName.str.match('S[0-9]+')]
 
 
-  def updateNaturalAbundanceCorrection(self, newMethod):
-    self.naturalAbundanceCorrection = newMethod
-    print(f"The method for Natural Abundance Correction has been updated to {newMethod}")
+  def updateTracer(self, newTracer):
+    self.tracer = newTracer
+    print(f"The tracer has been updated to {newTracer}")
     self.correctForNaturalAbundance()
 
 
@@ -215,7 +365,7 @@ class MSDataContainer:
     return dataDf_norm
 
   def correctForNaturalAbundance(self):
-    print(f"{self.naturalAbundanceCorrection} executed")
+    print(f"{self.tracer} executed")
 
   def saveStandardCurvesAndResults(self, useMask=False):
     # get current folder and create result folder if needed
@@ -478,18 +628,21 @@ class MSAnalyzer:
 
     # - - - - - - - - - - - - - - - - - - - - -
     # The Labeled Correction choice frame 
-    Correctionframe = ttk.LabelFrame(self.window, text="Natural Abundance Correction", relief=tk.RIDGE)
+    Correctionframe = ttk.LabelFrame(self.window, text="Isotope tracer", relief=tk.RIDGE)
     Correctionframe.grid(row=9, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2, pady=6)
 
     self.radioCorrectionVariable = tk.StringVar()
-    self.radioCorrectionVariable.set("Control")
-    self.radioCorrectionVariable.trace('w', lambda index,value,op : self.__updateNaturalAbundanceCorrectionMethod(self.radioCorrectionVariable.get()))
-    radiobutton1 = ttk.Radiobutton(Correctionframe, text="Control",
-                                   variable=self.radioCorrectionVariable, value="Control")
-    radiobutton2 = ttk.Radiobutton(Correctionframe, text="Theoretical",
-                                   variable=self.radioCorrectionVariable, value="Theoretical")
+    self.radioCorrectionVariable.set("C")
+    self.radioCorrectionVariable.trace('w', lambda index,value,op : self.__updateTracer(self.radioCorrectionVariable.get()))
+    radiobutton1 = ttk.Radiobutton(Correctionframe, text="C",
+                                   variable=self.radioCorrectionVariable, value="C")
+    radiobutton2 = ttk.Radiobutton(Correctionframe, text="H",
+                                   variable=self.radioCorrectionVariable, value="H")
+    radiobutton3 = ttk.Radiobutton(Correctionframe, text="O",
+                                   variable=self.radioCorrectionVariable, value="O")
     radiobutton1.grid(row=10, column=1, sticky=tk.W)
     radiobutton2.grid(row=10, column=2 , sticky=tk.W)
+    radiobutton3.grid(row=10, column=3, sticky=tk.W)
   
 
   def popupMsg(self, msg):
@@ -533,8 +686,8 @@ class MSAnalyzer:
     self.dataObject.updateStandards(self.volMixVar.get(), self.volTotalVar.get(), newStdVols)
     print(f"The volumeStandards have been updated to {newStdVols}")
 
-  def __updateNaturalAbundanceCorrectionMethod(self, newMethod):
-    self.dataObject.updateNaturalAbundanceCorrection(newMethod)
+  def __updateTracer(self, newMethod):
+    self.dataObject.updateTracer(newMethod)
 
   def computeResults(self):
     self.dataObject.saveStandardCurvesAndResults()
@@ -649,35 +802,48 @@ class MSAnalyzer:
 
 if __name__ == '__main__':
 
-  # Is the directory to look in for data files defined?
-  if len(sys.argv) == 1: # no arguments given to the function
-    initialDirectory = False
-  else:
-    initialDirectory = sys.argv[1]
+  # # Is the directory to look in for data files defined?
+  # if len(sys.argv) == 1: # no arguments given to the function
+  #   initialDirectory = False
+  # else:
+  #   initialDirectory = sys.argv[1]
 
-  # Choose data and template files
-  fileNames = initialFileChoser(initialDirectory)
-
-
-  # The container that will hold all the data
-  appData = MSDataContainer(fileNames)
-
-  print(f"""Two files have been loaded:
-    \tData file: {appData.dataFileName}
-    \tTemplate file: {appData.templateFileName}""")
-  print(f"The experiment type detected is '{appData.experimentType}'")
+  # # Choose data and template files
+  # fileNames = initialFileChoser(initialDirectory)
 
 
-  # Create the entire GUI program and pass in colNames for popup menu
-  app = MSAnalyzer(appData)
+  # # The container that will hold all the data
+  # appData = MSDataContainer(fileNames)
 
-  # Start the GUI event loop
-  app.window.mainloop()
+  # print(f"""Two files have been loaded:
+  #   \tData file: {appData.dataFileName}
+  #   \tTemplate file: {appData.templateFileName}""")
+  # print(f"The experiment type detected is '{appData.experimentType}'")
 
 
-  # print(appData.volumeMixTotal, appData.volumeMixForPrep, appData.volumeSample)
-  # print(appData.volumeStandards)
+  # # Create the entire GUI program and pass in colNames for popup menu
+  # app = MSAnalyzer(appData)
 
-  appData.dataDf.to_excel("test.xlsx")
+  # # Start the GUI event loop
+  # app.window.mainloop()
+
+
+  # # print(appData.volumeMixTotal, appData.volumeMixForPrep, appData.volumeSample)
+  # # print(appData.volumeStandards)
+  # # print(appData.dataColNames)
+  # # appData.dataDf.to_excel("test.xlsx")
+
+
+  data = pd.read_excel("test.xlsx").filter(regex="C14")
+  naProcess = NAProcess(data.columns[0], "C")
+
+  df_SMC = naProcess.correctForNaturalAbundance(data, method="SMC")
+  df_LSC = naProcess.correctForNaturalAbundance(data, method="LSC")
+  
+  # df_SMC.to_excel("test_SMC.xlsx", index=False)
+  # df_LSC.to_excel("test_LSC.xlsx", index=False)
+
+  # test = NAProcess("C14:0", "C")
+  # print(test.correctionMatrix)
 
 
