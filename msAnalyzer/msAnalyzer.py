@@ -176,6 +176,7 @@ class NAProcess:
       correctionMatrix = np.linalg.pinv(correctionMatrix)
       correctedData = np.matmul(dfData, correctionMatrix.transpose())
       # flatten unrealistic negative values to zero
+      correctedData = np.nan_to_num(correctedData)
       correctedData[correctedData<0] = 0
 
     elif method == "LSC":
@@ -207,12 +208,14 @@ class MSDataContainer:
     assert len(fileNames)==2 , "You must choose 2 files!"
     self.internalRef = internalRef
     self.tracer = tracer
+    self.NACMethod = "LSC" # least squares skewed matrix correction
     self.dataFileName, self.templateFileName = self.__getDataAndTemplateFileNames(fileNames)
     self.pathDirName = os.path.dirname(self.dataFileName)
     self.__regexExpression = {"NotLabeled": "([0-9]+)_([0-9]+)_([0-9]+)",
                               "Labeled": "([0-9]+)_([0-9]+).[0-9]+"}
     self.experimentType, self.dataColNames = self.__getExperimentTypeAndDataColumNames()
     self.dataDf = self.__getCleanedUpDataFrames()
+    # self.dataDf_corrected = self.dataDf.copy()
     self.__standardDf_template = self.__getStandardsTemplateDf()
     self.volumeMixTotal = 500
     self.volumeMixForPrep = 100
@@ -252,6 +255,7 @@ class MSDataContainer:
       regex = self.__regexExpression["NotLabeled"]
       self.dataColNames = [f"C{carbon[:2]}:{carbon[2:]} ({mass})" for name in self.dataColNames for num,carbon,mass in re.findall(regex, name)]
       df_Data.columns = self.dataColNames
+      self.internalRefList = self.dataColNames
     elif self.experimentType == "Labeled":
       regex = self.__regexExpression["Labeled"]
       ionAndMass = np.array([(int(num), int(mass)) for name in self.dataColNames for num,mass in re.findall(regex, name)])
@@ -271,6 +275,8 @@ class MSDataContainer:
       # add last carbon ions
       self.dataColNames = self.dataColNames + [f"C{carbon}:{sat} M.{ion}" for ion in range(FAparent[-1][0]-FAparent[-1][0], len(FAMasses)-FAparent[-1][0]) for (carbon,sat) in [[FAparent[-1][1], FAparent[-1][2]]]]
       df_Data.columns = self.dataColNames
+      # only parental ions for internalRefList
+      self.internalRefList = [ f"C{carbon}:{sat}" for (idx,carbon,sat) in FAparent]
 
     # get sample meta info from template file
     df_TemplateInfo = self.__getExperimentMetaInfoFromMAP(templateMap)
@@ -355,17 +361,36 @@ class MSDataContainer:
   def updateTracer(self, newTracer):
     self.tracer = newTracer
     print(f"The tracer has been updated to {newTracer}")
-    self.correctForNaturalAbundance()
+    self.dataDf_corrected = self.correctForNaturalAbundance()
 
+  def updateNACMethod(self, newMethod):
+    self.NACMethod = newMethod
+    print(f"The correction method for natural abundance has been updated to {newMethod}")
+    self.dataDf_corrected = self.correctForNaturalAbundance()
 
   def computeNormalizedData(self):
     '''Normalize the data to the internal ref'''
-    dataDf_norm = self.dataDf.copy()
-    dataDf_norm.iloc[:, 7:] = dataDf_norm.iloc[:, 7:].values/dataDf_norm[self.internalRef].values[:, np.newaxis]
-    return dataDf_norm
+    if self.experimentType == "Not Labeled":
+      dataDf_norm = self.dataDf.copy()
+      dataDf_norm.iloc[:, 7:] = dataDf_norm.iloc[:, 7:].values/dataDf_norm[self.internalRef].values[:, np.newaxis]
+      return dataDf_norm
+    else:
+      print("need to implement normalization for Labeled experiments")
 
   def correctForNaturalAbundance(self):
-    print(f"{self.tracer} executed")
+    correctedData = self.dataDf.iloc[:,:7]
+    for parentalIon in self.internalRefList:
+      ionMID = self.dataDf.filter(regex=parentalIon)
+      if ionMID.shape[1]<=1:
+        # no clusters, go to next
+        print(parentalIon, "doesn't have non parental ions")
+        correctedData = pd.concat([correctedData, ionMID], axis=1)
+        continue
+      ionNA = NAProcess(parentalIon, self.tracer)
+      correctedData = pd.concat([correctedData, ionNA.correctForNaturalAbundance(ionMID, method=self.NACMethod)], axis=1)
+    print(f"The MIDs have been corrected using the {self.NACMethod} method (tracer: {self.tracer})")
+    return correctedData
+
 
   def saveStandardCurvesAndResults(self, useMask=False):
     # get current folder and create result folder if needed
@@ -545,7 +570,7 @@ class MSAnalyzer:
     self.window = tk.Tk()
     self.window.title("MS Analyzer")
     self.dataObject = dataObject
-    self.FANames = dataObject.dataColNames
+    self.FANames = dataObject.internalRefList#.dataColNames
     self.internalRef = dataObject.internalRef
     self.create_widgets()
 
@@ -570,7 +595,7 @@ class MSAnalyzer:
 
     self.FAMESListValue = tk.StringVar()
     self.FAMESListValue.trace('w', lambda index,value,op : self.__updateInternalRef(FAMESList.get()))
-    FAMESList = ttk.Combobox(FAMESframe, height=6, textvariable=self.FAMESListValue)
+    FAMESList = ttk.Combobox(FAMESframe, height=6, textvariable=self.FAMESListValue, state="readonly", takefocus=False)
     FAMESList.grid(row=2, column=2, columnspan=2)
     FAMESList['values'] = self.FANames
     FAMESList.current(idxInternalRef)
@@ -626,23 +651,34 @@ class MSAnalyzer:
     quit_button = ttk.Button(self.window, text="Quit", command=self.window.destroy)
     quit_button.grid(row=1, column=4)
 
-    # - - - - - - - - - - - - - - - - - - - - -
-    # The Labeled Correction choice frame 
-    Correctionframe = ttk.LabelFrame(self.window, text="Isotope tracer", relief=tk.RIDGE)
-    Correctionframe.grid(row=9, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2, pady=6)
+    if self.dataObject.experimentType == "Labeled":
+      # - - - - - - - - - - - - - - - - - - - - -
+      # The Natural Abundance Correction frame 
+      Correctionframe = ttk.LabelFrame(self.window, text="Natural Abundance Correction", relief=tk.RIDGE)
+      Correctionframe.grid(row=9, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2, pady=6)
 
-    self.radioCorrectionVariable = tk.StringVar()
-    self.radioCorrectionVariable.set("C")
-    self.radioCorrectionVariable.trace('w', lambda index,value,op : self.__updateTracer(self.radioCorrectionVariable.get()))
-    radiobutton1 = ttk.Radiobutton(Correctionframe, text="C",
-                                   variable=self.radioCorrectionVariable, value="C")
-    radiobutton2 = ttk.Radiobutton(Correctionframe, text="H",
-                                   variable=self.radioCorrectionVariable, value="H")
-    radiobutton3 = ttk.Radiobutton(Correctionframe, text="O",
-                                   variable=self.radioCorrectionVariable, value="O")
-    radiobutton1.grid(row=10, column=1, sticky=tk.W)
-    radiobutton2.grid(row=10, column=2 , sticky=tk.W)
-    radiobutton3.grid(row=10, column=3, sticky=tk.W)
+      # Natural Abundance Correction Method
+      NACLabel = tk.Label(Correctionframe, text="Method:", fg="black", bg="#B4B4B4")
+      NACLabel.grid(row=10, column=1, sticky=tk.W)
+      self.radioCorrectionMethodVariable = tk.StringVar()
+      self.radioCorrectionMethodVariable.set("LSC")
+      self.radioCorrectionMethodVariable.trace('w', lambda index,value,op : self.__updateNACorrectionMethod(self.radioCorrectionMethodVariable.get()))
+      methodButton1 = ttk.Radiobutton(Correctionframe, text="Least Squares Skewed Matrix",
+                                     variable=self.radioCorrectionMethodVariable, value="LSC")
+      methodButton2 = ttk.Radiobutton(Correctionframe, text="Skewed Matrix",
+                                     variable=self.radioCorrectionMethodVariable, value="SMC")
+      methodButton1.grid(row=10, column=2, sticky=tk.W)
+      methodButton2.grid(row=11, column=2 , sticky=tk.W)
+
+      # isotope tracer
+      TracerLabel = tk.Label(Correctionframe, text="Atom tracer:", fg="black", bg="#B4B4B4")
+      TracerLabel.grid(row=12, column=1, sticky=tk.W)
+      self.TracerListValue = tk.StringVar()
+      self.TracerListValue.trace('w', lambda index,value,op : self.__updateTracer(TracerList.get()))
+      TracerList = ttk.Combobox(Correctionframe, textvariable=self.TracerListValue, width=3, state="readonly", takefocus=False)
+      TracerList.grid(row=12, column=2, sticky=tk.W)
+      TracerList['values'] = ["C", "H", "O"]
+      TracerList.current(0)
   
 
   def popupMsg(self, msg):
@@ -686,8 +722,11 @@ class MSAnalyzer:
     self.dataObject.updateStandards(self.volMixVar.get(), self.volTotalVar.get(), newStdVols)
     print(f"The volumeStandards have been updated to {newStdVols}")
 
-  def __updateTracer(self, newMethod):
-    self.dataObject.updateTracer(newMethod)
+  def __updateTracer(self, newTracer):
+    self.dataObject.updateTracer(newTracer)
+
+  def __updateNACorrectionMethod(self, newMethod):
+    self.dataObject.updateNACMethod(newMethod)
 
   def computeResults(self):
     self.dataObject.saveStandardCurvesAndResults()
@@ -802,43 +841,47 @@ class MSAnalyzer:
 
 if __name__ == '__main__':
 
-  # # Is the directory to look in for data files defined?
-  # if len(sys.argv) == 1: # no arguments given to the function
-  #   initialDirectory = False
-  # else:
-  #   initialDirectory = sys.argv[1]
+  # Is the directory to look in for data files defined?
+  if len(sys.argv) == 1: # no arguments given to the function
+    initialDirectory = False
+  else:
+    initialDirectory = sys.argv[1]
 
-  # # Choose data and template files
-  # fileNames = initialFileChoser(initialDirectory)
-
-
-  # # The container that will hold all the data
-  # appData = MSDataContainer(fileNames)
-
-  # print(f"""Two files have been loaded:
-  #   \tData file: {appData.dataFileName}
-  #   \tTemplate file: {appData.templateFileName}""")
-  # print(f"The experiment type detected is '{appData.experimentType}'")
+  # Choose data and template files
+  fileNames = initialFileChoser(initialDirectory)
 
 
-  # # Create the entire GUI program and pass in colNames for popup menu
-  # app = MSAnalyzer(appData)
+  # The container that will hold all the data
+  appData = MSDataContainer(fileNames)
 
-  # # Start the GUI event loop
-  # app.window.mainloop()
-
-
-  # # print(appData.volumeMixTotal, appData.volumeMixForPrep, appData.volumeSample)
-  # # print(appData.volumeStandards)
-  # # print(appData.dataColNames)
-  # # appData.dataDf.to_excel("test.xlsx")
+  print(f"""Two files have been loaded:
+    \tData file: {appData.dataFileName}
+    \tTemplate file: {appData.templateFileName}""")
+  print(f"The experiment type detected is '{appData.experimentType}'")
 
 
-  data = pd.read_excel("test.xlsx").filter(regex="C14")
-  naProcess = NAProcess(data.columns[0], "C")
+  # Create the entire GUI program and pass in colNames for popup menu
+  app = MSAnalyzer(appData)
 
-  df_SMC = naProcess.correctForNaturalAbundance(data, method="SMC")
-  df_LSC = naProcess.correctForNaturalAbundance(data, method="LSC")
+  # Start the GUI event loop
+  app.window.mainloop()
+
+
+  # print(appData.volumeMixTotal, appData.volumeMixForPrep, appData.volumeSample)
+  # print(appData.volumeStandards)
+  # print(appData.internalRefList)
+  # appData.dataDf.to_excel("test.xlsx")
+  appData.dataDf_corrected.to_excel("test_correctedGC.xlsx")
+
+
+  ###################################
+  # Natural Abundance Correction test
+
+  # data = pd.read_excel("test.xlsx").filter(regex="C14")
+  # naProcess = NAProcess(data.columns[0], "C")
+
+  # df_SMC = naProcess.correctForNaturalAbundance(data, method="SMC")
+  # df_LSC = naProcess.correctForNaturalAbundance(data, method="LSC")
   
   # df_SMC.to_excel("test_SMC.xlsx", index=False)
   # df_LSC.to_excel("test_LSC.xlsx", index=False)
