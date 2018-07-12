@@ -23,6 +23,7 @@ from multiprocessing import Pool
 #############################################################################
 
 class NAProcess:
+  # Adapted from IsoCor code (https://github.com/MetaSys-LISBP/IsoCor)
   
   ##################
   ## Init and setup
@@ -81,7 +82,6 @@ class NAProcess:
             'Si': np.array([Si28, Si29, Si30]), # silicon
             'S': np.array([S32, S33, S34, S36])} # sulphur
 
-  # Adapted from IsoCor code
   def __calculateMassDistributionVector(self, elementDict, atomTracer, NADistributions):
     """
     Calculate a mass distribution vector (at natural abundancy),
@@ -153,7 +153,9 @@ class NAProcess:
     '''
     costFunction, initialMID, target, correctionMatrix = args
     res = optimize.minimize(costFunction, initialMID, jac=True, args=(target, correctionMatrix), 
-                            method='L-BFGS-B', bounds=[(0., float('inf'))]*len(initialMID))
+                            method='L-BFGS-B', bounds=[(0., float('inf'))]*len(initialMID),
+                            options={'gtol': 1e-10, 'eps': 1e-08, 'maxiter': 15000, 'ftol': 2.220446049250313e-09, 
+                                     'maxcor': 10, 'maxfun': 15000})
     return res
 
   def correctForNaturalAbundance(self, dataFrame, method="LSC"):
