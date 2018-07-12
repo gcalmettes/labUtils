@@ -28,7 +28,7 @@ class NAProcess:
   ## Init and setup
   ##################
 
-  def __init__(self, entry, atomTracer, FAMES=True, purityTracer=[0., 1.]):
+  def __init__(self, entry, atomTracer, purityTracer=[0, 1], FAMES=True):
     self.NaturalAbundanceDistributions = self.__getNaturalAbundanceDistributions()
     self.formula = self.getFAFormulaString(entry, FAMES)
     self.elementsDict = self.parseFormula(self.formula)
@@ -204,10 +204,11 @@ class MSDataContainer:
   ## Init and setup
   ##################
 
-  def __init__(self, fileNames, internalRef="C19:0", tracer="C"):
+  def __init__(self, fileNames, internalRef="C19:0", tracer="C", tracerPurity=[0.00, 1.00]):
     assert len(fileNames)==2 , "You must choose 2 files!"
     self.internalRef = internalRef
     self.tracer = tracer
+    self.tracerPurity = tracerPurity
     self.NACMethod = "LSC" # least squares skewed matrix correction
     self.dataFileName, self.templateFileName = self.__getDataAndTemplateFileNames(fileNames)
     self.pathDirName = os.path.dirname(self.dataFileName)
@@ -215,7 +216,6 @@ class MSDataContainer:
                               "Labeled": "([0-9]+)_([0-9]+).[0-9]+"}
     self.experimentType, self.dataColNames = self.__getExperimentTypeAndDataColumNames()
     self.dataDf = self.__getCleanedUpDataFrames()
-    # self.dataDf_corrected = self.dataDf.copy()
     self.__standardDf_template = self.__getStandardsTemplateDf()
     self.volumeMixTotal = 500
     self.volumeMixForPrep = 100
@@ -320,7 +320,6 @@ class MSDataContainer:
       os.mkdir(directory)
     return directory
 
-
   ##################
   ## Analysis and Updates
   ##################
@@ -357,10 +356,13 @@ class MSDataContainer:
     '''Get normalized absorbance data for standards'''
     return self.dataDf_norm.loc[self.dataDf_norm.SampleName.str.match('S[0-9]+')]
 
-
   def updateTracer(self, newTracer):
     self.tracer = newTracer
     print(f"The tracer has been updated to {newTracer}")
+    self.dataDf_corrected = self.correctForNaturalAbundance()
+
+  def updateTracerPurity(self, newPurity):
+    self.tracerPurity = newPurity
     self.dataDf_corrected = self.correctForNaturalAbundance()
 
   def updateNACMethod(self, newMethod):
@@ -386,9 +388,9 @@ class MSDataContainer:
         print(parentalIon, "doesn't have non parental ions")
         correctedData = pd.concat([correctedData, ionMID], axis=1)
         continue
-      ionNA = NAProcess(parentalIon, self.tracer)
+      ionNA = NAProcess(parentalIon, self.tracer, purityTracer=self.tracerPurity)
       correctedData = pd.concat([correctedData, ionNA.correctForNaturalAbundance(ionMID, method=self.NACMethod)], axis=1)
-    print(f"The MIDs have been corrected using the {self.NACMethod} method (tracer: {self.tracer})")
+    print(f"The MIDs have been corrected using the {self.NACMethod} method (tracer: {self.tracer}, purity: {self.tracerPurity})")
     return correctedData
 
 
@@ -584,14 +586,14 @@ class MSAnalyzer:
     FAMESframe = ttk.LabelFrame(self.window, text="Select the internal control", relief=tk.GROOVE)
     FAMESframe.grid(row=1, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2)
 
-    FAMESListLabel = tk.Label(FAMESframe, text="FAMES")
+    FAMESListLabel = tk.Label(FAMESframe, text="FAMES", fg="black", bg="#ECECEC")
     FAMESListLabel.grid(row=2, column=1, sticky=tk.W + tk.N)
 
     # by default, choose internal reference defined in dataObject (C14:0)
     idxInternalRef = [i for i,name in enumerate(self.FANames) if self.dataObject.internalRef in name][0]
 
     self.FAMESLabelCurrent = tk.Label(FAMESframe, text=f"The current internal control is {self.FANames[idxInternalRef]}", fg="white", bg="#EBB0FF")
-    self.FAMESLabelCurrent.grid(row=3, column=1, columnspan=2)
+    self.FAMESLabelCurrent.grid(row=3, column=1, columnspan=3)
 
     self.FAMESListValue = tk.StringVar()
     self.FAMESListValue.trace('w', lambda index,value,op : self.__updateInternalRef(FAMESList.get()))
@@ -619,21 +621,21 @@ class MSAnalyzer:
     self.volTotalVar.trace('w', lambda index,value,op : self.__updateVolumeMixTotal(self.volTotalVar.get()))
     volTotalSpinbox = tk.Spinbox(Standardframe, from_=0, to=1000, width=5, textvariable=self.volTotalVar, command= lambda: self.__updateVolumeMixTotal(self.volTotalVar.get()), justify=tk.RIGHT)
     volTotalSpinbox.grid(row=5, column=2, sticky=tk.W, pady=3)
-    volTotalLabel = tk.Label(Standardframe, text="Vol. Mix Total")
+    volTotalLabel = tk.Label(Standardframe, text="Vol. Mix Total", fg="black", bg="#ECECEC")
     volTotalLabel.grid(row=5, column=1, sticky=tk.W)
 
     # Vol mix
     self.volMixVar.trace('w', lambda index,value,op : self.__updateVolumeMixForPrep(self.volMixVar.get()))
     volMixSpinbox = tk.Spinbox(Standardframe, from_=0, to=1000, width=5, textvariable=self.volMixVar, command= lambda: self.__updateVolumeMixForPrep(self.volMixVar.get()), justify=tk.RIGHT)
     volMixSpinbox.grid(row=6, column=2, sticky=tk.W, pady=3)
-    volMixLabel = tk.Label(Standardframe, text="Vol. Mix")
+    volMixLabel = tk.Label(Standardframe, text="Vol. Mix", fg="black", bg="#ECECEC")
     volMixLabel.grid(row=6, column=1, sticky=tk.W)
 
     # Vol sample
     self.volSampleVar.trace('w', lambda index,value,op : self.__updateVolumeSample(self.volSampleVar.get()))
     volSampleSpinbox = tk.Spinbox(Standardframe, from_=0, to=1000, width=5, textvariable=self.volSampleVar, command= lambda: self.__updateVolumeSample(self.volSampleVar.get()), justify=tk.RIGHT)
     volSampleSpinbox.grid(row=7, column=2, sticky=tk.W, pady=3)
-    volSampleLabel = tk.Label(Standardframe, text="Vol. Sample")
+    volSampleLabel = tk.Label(Standardframe, text="Vol. Sample", fg="black", bg="#ECECEC")
     volSampleLabel.grid(row=7, column=1, sticky=tk.W)
 
     # Standards uL
@@ -643,8 +645,8 @@ class MSAnalyzer:
     StandardVols.bind("<<TextModified>>", self.__updateVolumeStandards)
 
     # Compute Results button
-    StandardButton = ttk.Button(Standardframe, text="Compute results", command=lambda: self.computeResults())
-    StandardButton.grid(row=8, column=2, columnspan=2, pady=5)
+    computeResultsButton = ttk.Button(Standardframe, text="Compute results", command=lambda: self.computeResults())
+    computeResultsButton.grid(row=8, column=2, columnspan=2, pady=5)
 
     # - - - - - - - - - - - - - - - - - - - - -
     # Quit button in the upper right corner
@@ -658,8 +660,8 @@ class MSAnalyzer:
       Correctionframe.grid(row=9, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2, pady=6)
 
       # Natural Abundance Correction Method
-      NACLabel = tk.Label(Correctionframe, text="Method:", fg="black", bg="#B4B4B4")
-      NACLabel.grid(row=10, column=1, sticky=tk.W)
+      NACLabel = tk.Label(Correctionframe, text="Method:", fg="black", bg="#ECECEC")
+      NACLabel.grid(row=10, column=1, columnspan=2, sticky=tk.W)
       self.radioCorrectionMethodVariable = tk.StringVar()
       self.radioCorrectionMethodVariable.set("LSC")
       self.radioCorrectionMethodVariable.trace('w', lambda index,value,op : self.__updateNACorrectionMethod(self.radioCorrectionMethodVariable.get()))
@@ -667,18 +669,29 @@ class MSAnalyzer:
                                      variable=self.radioCorrectionMethodVariable, value="LSC")
       methodButton2 = ttk.Radiobutton(Correctionframe, text="Skewed Matrix",
                                      variable=self.radioCorrectionMethodVariable, value="SMC")
-      methodButton1.grid(row=10, column=2, sticky=tk.W)
-      methodButton2.grid(row=11, column=2 , sticky=tk.W)
+      methodButton1.grid(row=11, column=1, columnspan=2, sticky=tk.W)
+      methodButton2.grid(row=12, column=1 , columnspan=2, sticky=tk.W)
 
       # isotope tracer
-      TracerLabel = tk.Label(Correctionframe, text="Atom tracer:", fg="black", bg="#B4B4B4")
-      TracerLabel.grid(row=12, column=1, sticky=tk.W)
+      TracerLabel = tk.Label(Correctionframe, text="Atom tracer:", fg="black", bg="#ECECEC")
+      TracerLabel.grid(row=10, column=3, sticky=tk.E)
       self.TracerListValue = tk.StringVar()
       self.TracerListValue.trace('w', lambda index,value,op : self.__updateTracer(TracerList.get()))
       TracerList = ttk.Combobox(Correctionframe, textvariable=self.TracerListValue, width=3, state="readonly", takefocus=False)
-      TracerList.grid(row=12, column=2, sticky=tk.W)
+      TracerList.grid(row=11, column=3, sticky=tk.E)
       TracerList['values'] = ["C", "H", "O"]
       TracerList.current(0)
+
+      # Standards uL
+      self.tracerPurity = self.dataObject.tracerPurity
+      TracerPurity = CustomText(Correctionframe, height=3, width=12)
+      TracerPurity.grid(row=12, column=3, sticky=tk.E)
+      TracerPurity.insert(tk.END, "Purity:\n"+" ".join([f"{pur}" for pur in self.tracerPurity]))
+      TracerPurity.bind("<<TextModified>>", self.__updateTracerPurity)
+
+      # Compute Results button
+      inspectCorrectionButton = ttk.Button(Correctionframe, text="Inspect NA correction", command=lambda: self.inspectCorrectionPlots())
+      inspectCorrectionButton.grid(row=13, column=2, columnspan=2, pady=5)
   
 
   def popupMsg(self, msg):
@@ -717,13 +730,19 @@ class MSAnalyzer:
     print(f"The volumeSample has been updated to {newVolumeSample}")
 
   def __updateVolumeStandards(self, event):
-    newStdVols = [float(vol) for vol in re.findall(r"(?<!\d)\d+(?!\d)", event.widget.get("1.0", "end-1c"))]
+    newStdVols = [float(vol) for vol in re.findall(r"(?<!\d)\d+\.?\d*(?!\d)", event.widget.get("1.0", "end-1c"))]
     self.stdVols = newStdVols
     self.dataObject.updateStandards(self.volMixVar.get(), self.volTotalVar.get(), newStdVols)
     print(f"The volumeStandards have been updated to {newStdVols}")
 
   def __updateTracer(self, newTracer):
     self.dataObject.updateTracer(newTracer)
+
+  def __updateTracerPurity(self, event):
+    newPurity = [float(pur) for pur in re.findall(r"(?<!\d)\d+\.?\d*(?!\d)", event.widget.get("1.0", "end-1c"))]
+    self.tracerPurity = newPurity
+    self.dataObject.updateTracerPurity(newPurity)
+    print(f"The tracer purity vector has been updated to {newPurity}")
 
   def __updateNACorrectionMethod(self, newMethod):
     self.dataObject.updateNACMethod(newMethod)
@@ -747,6 +766,11 @@ class MSAnalyzer:
 
     FAMESbutton = ttk.Button(selectFrame, text="Select", command = lambda: self.modifySelection(selectFrame, FAMESlistbox))
     FAMESbutton.grid(row=3, column=1, columnspan=2, pady=10)
+
+  def inspectCorrectionPlots(self):
+    print("inspectCorrection clicked")
+    #self.dataObject.saveStandardCurvesAndResults()
+    #self.popupMsg("The results and plots have been saved.\nCheck out the standard plots.\nDo you want to modify the standards?")
 
   def modifySelection(self, frameToKill, selection):
     FAMESselected = [selection.get(i) for i in selection.curselection()]
