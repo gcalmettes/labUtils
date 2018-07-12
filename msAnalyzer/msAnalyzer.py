@@ -178,7 +178,6 @@ class NAProcess:
       correctionMatrix = np.linalg.pinv(correctionMatrix)
       correctedData = np.matmul(dfData, correctionMatrix.transpose())
       # flatten unrealistic negative values to zero
-      correctedData = np.nan_to_num(correctedData)
       correctedData[correctedData<0] = 0
 
     elif method == "LSC":
@@ -286,7 +285,7 @@ class MSDataContainer:
     assert len(df_TemplateInfo)==len(df_Data), \
     f"The number of declared samples in the template (n={len(df_TemplateInfo)}) does not match the number of samples detected in the data file (n={len(df_Data)})"
 
-    return pd.concat([df_Meta, df_TemplateInfo, df_Data], axis=1)
+    return pd.concat([df_Meta, df_TemplateInfo, df_Data], axis=1).fillna(0)
 
   def __getOrderedDfBasedOnTemplate(self, df, templateMap):
     '''Get new df_Data and df_Meta based on template'''
@@ -591,7 +590,7 @@ class MSAnalyzer:
     FAMESListLabel = tk.Label(FAMESframe, text="FAMES", fg="black", bg="#ECECEC")
     FAMESListLabel.grid(row=2, column=1, sticky=tk.W + tk.N)
 
-    # by default, choose internal reference defined in dataObject (C14:0)
+    # by default, choose internal reference defined in dataObject (C19:0)
     idxInternalRef = [i for i,name in enumerate(self.FANames) if self.dataObject.internalRef in name][0]
 
     self.FAMESLabelCurrent = tk.Label(FAMESframe, text=f"The current internal control is {self.FANames[idxInternalRef]}", fg="white", bg="#EBB0FF")
@@ -703,7 +702,7 @@ class MSAnalyzer:
     label = ttk.Label(popup, text=msg, font=("Verdana", 14))
     label.grid(row=1, column=1, columnspan=2, padx=10, pady=10)
       
-    B1 = ttk.Button(popup, text="Yes", command = lambda: self.inspectPlots(popup))
+    B1 = ttk.Button(popup, text="Yes", command = lambda: self.inspectStandardPlots(popup))
     B1.grid(row=2, column=1, pady=10)
 
     def quitApp():
@@ -753,7 +752,7 @@ class MSAnalyzer:
     self.dataObject.saveStandardCurvesAndResults()
     self.popupMsg("The results and plots have been saved.\nCheck out the standard plots.\nDo you want to modify the standards?")
 
-  def inspectPlots(self, popup):
+  def inspectStandardPlots(self, popup):
     popup.destroy()
         
     selectFrame = tk.Tk()
@@ -769,11 +768,6 @@ class MSAnalyzer:
     FAMESbutton = ttk.Button(selectFrame, text="Select", command = lambda: self.modifySelection(selectFrame, FAMESlistbox))
     FAMESbutton.grid(row=3, column=1, columnspan=2, pady=10)
 
-  def inspectCorrectionPlots(self):
-    print("inspectCorrection clicked")
-    #self.dataObject.saveStandardCurvesAndResults()
-    #self.popupMsg("The results and plots have been saved.\nCheck out the standard plots.\nDo you want to modify the standards?")
-
   def modifySelection(self, frameToKill, selection):
     FAMESselected = [selection.get(i) for i in selection.curselection()]
 
@@ -781,9 +775,6 @@ class MSAnalyzer:
     currentFAMESidx = 0
 
     fig,ax = plt.subplots(figsize=(4,3))
-    ax.set_xlabel("Quantity (nMoles)")
-    ax.set_ylabel("Absorbance")
-    fig.tight_layout()
 
     plotFrame = tk.Tk()
     plotFrame.wm_title("Standard curve inspector")
@@ -794,6 +785,9 @@ class MSAnalyzer:
     canvas = FigureCanvasTkAgg(fig, plotFrame)
 
     self.plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox)
+
+    # make everything fit
+    fig.tight_layout()
 
     figFrame = canvas.get_tk_widget()#.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
     figFrame.grid(row=1, column=1, columnspan=2, rowspan=3, pady=10, padx=10)
@@ -834,9 +828,6 @@ class MSAnalyzer:
   def plotIsolatedFAMES(self, famesName, ax, canvas, pointsListbox):
     ax.clear()
 
-    ax.set_xlabel("Quantity (nMoles)")
-    ax.set_ylabel("Absorbance")
-
     carbon = re.findall(r"(C\d+:\d+)", famesName)[0]
     maskSelected = [not (i in pointsListbox.curselection()) for i in range(len(self.dataObject.standardDf_nMoles[carbon].values))]
     newMask = [(m1 & m2) for m1,m2 in zip(self.dataObject._maskFAMES[famesName]["originalMask"], maskSelected)]
@@ -857,8 +848,85 @@ class MSAnalyzer:
     # plot of data
     ax.plot(xfit, yfit, "purple")
     ax.set_title(famesName)
+    ax.set_xlabel("Quantity (nMoles)")
+    ax.set_ylabel("Absorbance")
 
     canvas.draw()
+
+
+  def inspectCorrectionPlots(self):
+    # # will go over all the selectedFAMES
+    currentCorrectionIdx = 0
+
+    fig,ax = plt.subplots(figsize=(7,3))
+
+    plotFrame = tk.Tk()
+    plotFrame.wm_title("Natural Abundance Correction inspector")
+
+    #pointsListbox = tk.Listbox(plotFrame, height=8, selectmode='multiple')
+    #pointsListbox.grid(row=1, column=3, columnspan=2, pady=10, padx=5)
+
+    canvas = FigureCanvasTkAgg(fig, plotFrame)
+
+    self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], ax, canvas)
+
+    # make everything fit
+    fig.tight_layout()
+
+    figFrame = canvas.get_tk_widget()#.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
+    figFrame.grid(row=1, column=1, columnspan=6, rowspan=3, pady=10, padx=10)
+
+    def quitCurrent():
+      plt.close('all')
+      plotFrame.destroy()
+
+    quitButton = ttk.Button(plotFrame, text="Quit", command = lambda: quitCurrent())
+    quitButton.grid(row=4, column=1, pady=5)
+
+    def goToNextPlot(direction):
+      nonlocal currentCorrectionIdx
+      if (currentCorrectionIdx+direction>=0) & (currentCorrectionIdx+direction<len(self.FANames)):
+        currentCorrectionIdx = currentCorrectionIdx+direction
+        self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], ax, canvas)
+        nextButton["text"]="Next" # in case we come from last plot
+        if currentCorrectionIdx == len(self.FANames)-1:
+          # last plot
+          nextButton["text"]="Finish"
+      elif (currentCorrectionIdx+direction<0):
+        currentCorrectionIdx = 0
+        print("You are already looking at the first correction plot!")
+      else:
+        quitCurrent()
+    
+    previousButton = ttk.Button(plotFrame, text="Previous", command = lambda: goToNextPlot(-1))
+    previousButton.grid(row=4, column=5, pady=5)
+    nextButton = ttk.Button(plotFrame, text="Next", command = lambda: goToNextPlot(1))
+    nextButton.grid(row=4, column=6, pady=5)
+
+
+  def plotIsolatedCorrection(self, famesName, ax, canvas):
+    ax.clear()
+
+    # for test purpose, only first row
+    originalData = self.dataObject.dataDf.filter(regex=famesName).iloc[0]
+    correctedData = self.dataObject.dataDf_corrected.filter(regex=famesName).iloc[0]
+
+    # make x label
+    xLabels = [f"M.{i}" for i in range(len(originalData))]
+    xrange = np.arange(len(originalData))
+    barWidth = 0.4
+
+    ax.bar(xrange-barWidth/2, originalData, barWidth, label="Original")
+    ax.bar(xrange+barWidth/2, correctedData, barWidth, label="Corrected")
+    ax.set_xticks(xrange)
+    ax.set_xticklabels(xLabels)
+    ax.legend()
+
+    ax.set_ylabel("Absorbance")
+    ax.set_title(famesName)
+
+    canvas.draw()
+
 
 
 ############################
@@ -897,7 +965,7 @@ if __name__ == '__main__':
   # print(appData.volumeStandards)
   # print(appData.internalRefList)
   # appData.dataDf.to_excel("test.xlsx")
-  appData.dataDf_corrected.to_excel("test_correctedGC.xlsx")
+  # appData.dataDf_corrected.to_excel("test_correctedGC.xlsx")
 
 
   ###################################
