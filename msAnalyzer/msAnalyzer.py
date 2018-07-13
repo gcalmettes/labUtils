@@ -295,7 +295,6 @@ class MSDataContainer:
     df.index=df["Name"]
     df = df.reindex(newOrder)
     df.index = list(range(len(df)))
-    # df_Data["MSsample"] = templateMap["SampleID"]
 
     df_Meta = df[["Name", "Data File"]]
     df_Data = df.iloc[:, 7:] # 7 first cols are info
@@ -379,10 +378,11 @@ class MSDataContainer:
     '''Normalize the data to the internal ref'''
     if self.experimentType == "Not Labeled":
       dataDf_norm = self.dataDf.copy()
-      dataDf_norm.iloc[:, 7:] = dataDf_norm.iloc[:, 7:].values/dataDf_norm[self.internalRef].values[:, np.newaxis]
+      dataDf_norm.iloc[:, 7:] = dataDf_norm.iloc[:, 7:].divide(dataDf_norm[self.internalRef], axis=0)
     else:
       sumFracDf = self.calculateSumIonsForAll()
-      sumFracDf = pd.DataFrame(columns=sumFracDf.columns, data=sumFracDf.values/sumFracDf[self.internalRef].values[:, np.newaxis])
+      sumFracDf = sumFracDf.divide(sumFracDf[self.internalRef], axis=0)
+      # sumFracDf = pd.DataFrame(columns=sumFracDf.columns, data=sumFracDf.values/sumFracDf[self.internalRef].values[:, np.newaxis])
       dataDf_norm = pd.concat([self.dataDf.iloc[:,:7], sumFracDf], axis=1)
     return dataDf_norm
 
@@ -427,7 +427,7 @@ class MSDataContainer:
     resultsDf = pd.DataFrame(index=self.dataDf_norm.index)
 
     # Plot of Standard
-    stdAbsorbance = self.getStandardAbsorbance().filter(regex="C[0-9]")
+    stdAbsorbance = self.getStandardAbsorbance().iloc[:,7:]
     assert len(stdAbsorbance) == len(self.standardDf_nMoles),\
     f"The number of standards declared in the STANDARD_{'_'.join(self.experimentType.upper().split(' '))} sheet (n={len(self.standardDf_nMoles)}) is different than the number of standards declared in the data file (n={len(stdAbsorbance)})"
     
@@ -507,8 +507,8 @@ class MSDataContainer:
         ax.plot(xvals[mask], yvals[mask], "o")
         ax.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "x", color="black", ms=3)
         ax.plot(xfit, yfit, "red")
-        # plot values calculated from curve
-        ax.plot(resultsDf[col], self.dataDf_norm[col], "o", alpha=0.3)
+        # plot values calculated from curve (visually adjust for normalization by weight done above)
+        ax.plot(resultsDf[col]*self.dataDf_norm["SampleWeight"], self.dataDf_norm[col], "o", alpha=0.3)
       ax.set_title(col)
       ax.set_xlabel("Quantity (nMoles)")
       ax.set_ylabel("Absorbance")
@@ -979,12 +979,14 @@ class MSAnalyzer:
 
 if __name__ == '__main__':
 
-  dvt = False
+  dvt = True
   if (dvt):
     filenames = ["data/180530ETV22_37Liv_FAMES-labeled.xlsx", "data/template_labeled.xlsx"]
     appData = MSDataContainer(filenames)
     appData.computeNACorrectionDf()
-    appData.dataDf_labeledProportions.to_excel("test_labeledProportions.xlsx")
+    appData.updateInternalRef(appData.internalRef)
+    # print(appData.getStandardAbsorbance().iloc[:,7:])
+    # appData.dataDf_labeledProportions.to_excel("test_labeledProportions.xlsx")
     # appData.dataDf_corrected = appData.correctForNaturalAbundance()
 
   else:
