@@ -752,6 +752,7 @@ class MSAnalyzer:
     self.dataObject.saveStandardCurvesAndResults()
     self.popupMsg("The results and plots have been saved.\nCheck out the standard plots.\nDo you want to modify the standards?")
 
+  # --------------- Standard plots -------------------
   def inspectStandardPlots(self, popup):
     popup.destroy()
         
@@ -803,8 +804,7 @@ class MSAnalyzer:
         if currentFAMESidx == len(FAMESselected)-1:
           plotButton2["text"]="Send"
       else:
-        plt.close('all')
-        plotFrame.destroy()
+        quitCurrent()
         self.dataObject.saveStandardCurvesAndResults(useMask=True)
         self.popupMsg("The results and plots have been saved.\nCheck out the standard plots.\nDo you want to modify the standards?")
 
@@ -853,41 +853,18 @@ class MSAnalyzer:
 
     canvas.draw()
 
-
+  # --------------- Correction plots -------------------
   def inspectCorrectionPlots(self):
-    # # will go over all the selectedFAMES
-    currentCorrectionIdx = 0
-
-    fig,ax = plt.subplots(figsize=(7,3))
-
-    plotFrame = tk.Tk()
-    plotFrame.wm_title("Natural Abundance Correction inspector")
-
-    #pointsListbox = tk.Listbox(plotFrame, height=8, selectmode='multiple')
-    #pointsListbox.grid(row=1, column=3, columnspan=2, pady=10, padx=5)
-
-    canvas = FigureCanvasTkAgg(fig, plotFrame)
-
-    self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], ax, canvas)
-
-    # make everything fit
-    fig.tight_layout()
-
-    figFrame = canvas.get_tk_widget()#.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
-    figFrame.grid(row=1, column=1, columnspan=6, rowspan=3, pady=10, padx=10)
 
     def quitCurrent():
       plt.close('all')
       plotFrame.destroy()
 
-    quitButton = ttk.Button(plotFrame, text="Quit", command = lambda: quitCurrent())
-    quitButton.grid(row=4, column=1, pady=5)
-
     def goToNextPlot(direction):
       nonlocal currentCorrectionIdx
       if (currentCorrectionIdx+direction>=0) & (currentCorrectionIdx+direction<len(self.FANames)):
         currentCorrectionIdx = currentCorrectionIdx+direction
-        self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], ax, canvas)
+        self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas)
         nextButton["text"]="Next" # in case we come from last plot
         if currentCorrectionIdx == len(self.FANames)-1:
           # last plot
@@ -897,19 +874,50 @@ class MSAnalyzer:
         print("You are already looking at the first correction plot!")
       else:
         quitCurrent()
+
+    def showNewSampleSelection(event):
+      self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas)
+    
+    plotFrame = tk.Tk()
+    plotFrame.wm_title("Natural Abundance Correction inspector")
+
+    currentCorrectionIdx = 0 # will be used to go from an FAME to another
+
+    # sample chooser
+    SampleList = ttk.Combobox(plotFrame, height=6, state="readonly")
+    SampleList.grid(row=1, column=1, columnspan=2)
+    SampleList['values'] = [f"{name} - {sample}" for name,sample in self.dataObject.dataDf[["Name", "SampleName"]].values]
+    SampleList.current(0)
+    # somehow for this one I couldn't just link to a tk.variable and trace to get update working ...
+    # so I directly bind to a function on change
+    SampleList.bind("<<ComboboxSelected>>", showNewSampleSelection)
+
+    # Main fig
+    fig,ax = plt.subplots(figsize=(7,3))
+    canvas = FigureCanvasTkAgg(fig, plotFrame)
+    self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas)
+    fig.tight_layout()
+    figFrame = canvas.get_tk_widget()#.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
+    figFrame.grid(row=2, column=1, columnspan=8, rowspan=3, pady=10, padx=10)
+
+    # buttons and others
+    quitButton = ttk.Button(plotFrame, text="Quit", command = lambda: quitCurrent())
+    quitButton.grid(row=5, column=1, pady=5)
     
     previousButton = ttk.Button(plotFrame, text="Previous", command = lambda: goToNextPlot(-1))
-    previousButton.grid(row=4, column=5, pady=5)
+    previousButton.grid(row=5, column=7, pady=5)
     nextButton = ttk.Button(plotFrame, text="Next", command = lambda: goToNextPlot(1))
-    nextButton.grid(row=4, column=6, pady=5)
+    nextButton.grid(row=5, column=8, pady=5)
 
-
-  def plotIsolatedCorrection(self, famesName, ax, canvas):
+  def plotIsolatedCorrection(self, famesName, sampleName, ax, canvas):
     ax.clear()
 
-    # for test purpose, only first row
-    originalData = self.dataObject.dataDf.filter(regex=famesName).iloc[0]
-    correctedData = self.dataObject.dataDf_corrected.filter(regex=famesName).iloc[0]
+    # get row associated with sampleName provided
+    row = np.where(self.dataObject.dataDf["Name"] == sampleName.split(" ")[0])[0][0]
+    print(row)
+
+    originalData = self.dataObject.dataDf.filter(regex=famesName).iloc[row]
+    correctedData = self.dataObject.dataDf_corrected.filter(regex=famesName).iloc[row]
 
     # make x label
     xLabels = [f"M.{i}" for i in range(len(originalData))]
