@@ -454,7 +454,9 @@ class MSDataContainer:
         yvals = stdAbsorbance[col].values
         
         if not useMask:
-          mask = [~np.logical_or(np.isnan(x), np.isnan(y)) for x,y in zip(xvals, yvals)]
+          mask1 = [~np.logical_or(np.isnan(x), np.isnan(y)) for x,y in zip(xvals, yvals)]
+          mask2 = [~np.logical_or(np.isnan(x), y==0) for x,y in zip(xvals, yvals)]
+          mask = [(m1 & m2) for m1,m2 in zip(mask1, mask2)]
           # add carbon to valid standard FAMES and save mask
           self._maskFAMES[col] = {"originalMask": mask}
         else:
@@ -807,12 +809,17 @@ class MSAnalyzer:
     plotFrame = tk.Tk()
     plotFrame.wm_title("Standard curve inspector")
 
+    def updateSelection(event):
+      self.plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox, 0)
+
     pointsListbox = tk.Listbox(plotFrame, height=8, selectmode='multiple')
     pointsListbox.grid(row=1, column=3, columnspan=2, pady=10, padx=5)
+    pointsListbox.bind("<<ListboxSelect>>", updateSelection)
+
 
     canvas = FigureCanvasTkAgg(fig, plotFrame)
 
-    self.plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox)
+    self.plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox, 1)
 
     # make everything fit
     fig.tight_layout()
@@ -820,16 +827,18 @@ class MSAnalyzer:
     figFrame = canvas.get_tk_widget()#.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
     figFrame.grid(row=1, column=1, columnspan=2, rowspan=3, pady=10, padx=10)
 
-    plotButton = ttk.Button(plotFrame, text="Remove", command = lambda: self.plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox))
-    plotButton.grid(row=2, column=3, pady=5)
-
-    def goToNextPlot():
+    def goToNextPlot(direction):
       nonlocal currentFAMESidx
-      if currentFAMESidx+1<len(FAMESselected):
-        currentFAMESidx = currentFAMESidx+1
-        self.plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox)
+      if (currentFAMESidx+direction>=0) & (currentFAMESidx+direction<len(FAMESselected)):
+        currentFAMESidx = currentFAMESidx+direction
+        self.plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox, 1)
+        nextButton["text"]="Next" # in case we come from last plot
         if currentFAMESidx == len(FAMESselected)-1:
-          plotButton2["text"]="Send"
+          # last plot
+          nextButton["text"]="Finish"
+      elif (currentFAMESidx+direction<0):
+        currentCorrectionIdx = 0
+        print("You are already looking at the first standard plot!")
       else:
         quitCurrent()
         self.dataObject.saveStandardCurvesAndResults(useMask=True)
@@ -839,8 +848,10 @@ class MSAnalyzer:
       textButton = "Send"
     else:
       textButton = "Next"
-    plotButton2 = ttk.Button(plotFrame, text=textButton, command = lambda: goToNextPlot())
-    plotButton2.grid(row=2, column=4, pady=5)
+    nextButton = ttk.Button(plotFrame, text=textButton, command = lambda: goToNextPlot(1))
+    nextButton.grid(row=2, column=4, pady=5)
+    previousButton = ttk.Button(plotFrame, text="Previous", command = lambda: goToNextPlot(-1))
+    previousButton.grid(row=2, column=3, pady=5)
 
     def quitCurrent():
       plt.close('all')
@@ -852,20 +863,40 @@ class MSAnalyzer:
     frameToKill.destroy()
 
 
-  def plotIsolatedFAMES(self, famesName, ax, canvas, pointsListbox):
+  def plotIsolatedFAMES(self, famesName, ax, canvas, pointsListbox, direction=1):
     ax.clear()
+
+    if direction == 1:
+      pointsListbox.selection_clear(0, tk.END)
 
     carbon = re.findall(r"(C\d+:\d+)", famesName)[0]
     maskSelected = [not (i in pointsListbox.curselection()) for i in range(len(self.dataObject.standardDf_nMoles[carbon].values))]
     newMask = [(m1 & m2) for m1,m2 in zip(self.dataObject._maskFAMES[famesName]["originalMask"], maskSelected)]
     self.dataObject._maskFAMES[famesName]["newMask"] = newMask
-    
+
     xvals = self.dataObject.standardDf_nMoles[carbon].values
     yvals = self.dataObject.getStandardAbsorbance()[famesName].values
 
     pointsListbox.delete(0, tk.END)
     for i,(x,y) in enumerate(zip(xvals, yvals)):
-      pointsListbox.insert(tk.END, f" point{i}: ({x:.3f}, {y:.3f})")
+      if y==0:
+        # nan are converted to zero when initial cleaned dataDf is created, so just show
+        # that those were in fact nans
+        y = 'NAN'
+      else:
+        y = f"{y:.3f}"
+      pointsListbox.insert(tk.END, f" point{i}: ({x:.3f}, {y})")
+
+    # select points that were invalid in original mask
+    alreadyMaskedIndices = [i for i,boolean in enumerate(self.dataObject._maskFAMES[famesName]["originalMask"]) if boolean==False]
+    for idx in alreadyMaskedIndices:
+      pointsListbox.select_set(idx)
+
+    if direction==0:
+      # if we are still on the same FAMES, remember previous selection too
+      alreadyMaskedIndices = [i for i,boolean in enumerate(newMask) if boolean==False]
+      for idx in alreadyMaskedIndices:
+        pointsListbox.select_set(idx)
 
     ax.plot(xvals[newMask], yvals[newMask], "o")
     ax.plot(xvals[[not i for i in newMask]], yvals[[not i for i in newMask]], "or")
