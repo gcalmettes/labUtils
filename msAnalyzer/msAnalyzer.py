@@ -473,7 +473,7 @@ class MSDataContainer:
         ax.text(ax.get_xlim()[0]+(ax.get_xlim()[1]-ax.get_xlim()[0])*0.05, ax.get_ylim()[0]+(ax.get_ylim()[1]-ax.get_ylim()[0])*0.9, f"R2={stats.pearsonr(xvals[mask], yvals[mask])[0]**2:.4f}", size=14, color="purple")
         ax.text(ax.get_xlim()[0]+(ax.get_xlim()[1]-ax.get_xlim()[0])*0.97, ax.get_ylim()[0]+(ax.get_ylim()[1]-ax.get_ylim()[0])*0.05, f"y={slope:.4f}x+{intercept:.4f}", size=14, color="red", ha="right")
         # calculate final results and save
-        resultsDf[col] = ((self.dataDf_norm[col]-intercept)/slope)/self.dataDf_norm["SampleWeight"]
+        resultsDf[col] = ((self.dataDf_norm[col]-intercept)/slope)#/self.dataDf_norm["SampleWeight"]
       ax.set_title(col)
       ax.set_xlabel("Quantity (nMoles)")
       ax.set_ylabel("Absorbance")
@@ -508,24 +508,24 @@ class MSDataContainer:
         ax.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "x", color="black", ms=3)
         ax.plot(xfit, yfit, "red")
         # plot values calculated from curve (visually adjust for normalization by weight done above)
-        ax.plot(resultsDf[col]*self.dataDf_norm["SampleWeight"], self.dataDf_norm[col], "o", alpha=0.3)
+        ax.plot(resultsDf[col], self.dataDf_norm[col], "o", alpha=0.3)
       ax.set_title(col)
       ax.set_xlabel("Quantity (nMoles)")
       ax.set_ylabel("Absorbance")
 
     fig2.tight_layout()
     
+    ############
     # Save data
-    resultsDf["SampleID"]=self.dataDf_norm["SampleID"]
-    resultsDf["SampleName"]=self.dataDf_norm["SampleName"]
-    resultsDf["Comments"]=self.dataDf_norm["Comments"]
-    resultsDf = resultsDf[np.concatenate([["SampleID", "SampleName", "Comments"], np.array(resultsDf.filter(regex="C[0-9]").columns)])]
-        
+
     # Create a Pandas Excel writer using XlsxWriter as the engine.
     writer = pd.ExcelWriter(f"{savePath}/results{extension}.xlsx", engine='xlsxwriter')
 
     # Write each dataframe to a different worksheet.
-    resultsDf.to_excel(writer, sheet_name='Results', index=False)
+    resNorm = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], resultsDf.divide(self.dataDf_norm["SampleWeight"], axis=0)], axis=1)
+    resNorm.to_excel(writer, sheet_name='Results Normalized', index=False)
+    res = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], resultsDf], axis=1)
+    res.to_excel(writer, sheet_name='Results', index=False)
     self.dataDf.to_excel(writer, sheet_name='Initial Data', index=False)
     self.dataDf_norm.to_excel(writer, sheet_name='Normalized Data', index=False)
 
