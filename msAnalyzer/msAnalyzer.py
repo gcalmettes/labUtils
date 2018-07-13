@@ -891,7 +891,7 @@ class MSAnalyzer:
       nonlocal currentCorrectionIdx
       if (currentCorrectionIdx+direction>=0) & (currentCorrectionIdx+direction<len(self.FANames)):
         currentCorrectionIdx = currentCorrectionIdx+direction
-        self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas, correctionListBox)
+        self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas, correctionTreeView)
         nextButton["text"]="Next" # in case we come from last plot
         if currentCorrectionIdx == len(self.FANames)-1:
           # last plot
@@ -903,7 +903,7 @@ class MSAnalyzer:
         quitCurrent()
 
     def showNewSampleSelection(event):
-      self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas, correctionListBox)
+      self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas, correctionTreeView)
     
     plotFrame = tk.Tk()
     plotFrame.wm_title("Natural Abundance Correction inspector")
@@ -919,14 +919,20 @@ class MSAnalyzer:
     # so I directly bind to a function on change
     SampleList.bind("<<ComboboxSelected>>", showNewSampleSelection)
 
-        # table display
-    correctionListBox = tk.Listbox(plotFrame, height=15, selectmode='multiple')
-    correctionListBox.grid(row=2, column=8, columnspan=3, pady=5, padx=10)
+    # table display
+    correctionTreeView = ttk.Treeview(plotFrame, columns=("original", "corrected"), height=15)
+    correctionTreeView.heading('#0', text='')
+    correctionTreeView.heading('#1', text='Original')
+    correctionTreeView.heading('#2', text='Corrected')
+    correctionTreeView.column("#0", width=50)
+    correctionTreeView.column("#1", width=100, anchor=tk.E)
+    correctionTreeView.column("#2", width=100, anchor=tk.E)
+    correctionTreeView.grid(row=2, column=8, columnspan=3, pady=2, padx=10)
 
     # Main fig
     fig,ax = plt.subplots(figsize=(6,3))
     canvas = FigureCanvasTkAgg(fig, plotFrame)
-    self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas, correctionListBox)
+    self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas, correctionTreeView)
     fig.tight_layout()
     figFrame = canvas.get_tk_widget()#.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
     figFrame.grid(row=2, column=1, columnspan=7, rowspan=3, pady=10, padx=10)
@@ -940,7 +946,7 @@ class MSAnalyzer:
     nextButton = ttk.Button(plotFrame, text="Next", command = lambda: goToNextPlot(1))
     nextButton.grid(row=5, column=7, pady=5)
 
-  def plotIsolatedCorrection(self, famesName, sampleName, ax, canvas, pointsListbox):
+  def plotIsolatedCorrection(self, famesName, sampleName, ax, canvas, treeView):
     ax.clear()
 
     # get row associated with sampleName provided
@@ -966,10 +972,9 @@ class MSAnalyzer:
     canvas.draw()
 
     # clear and update table
-    pointsListbox.delete(0, tk.END)
-    pointsListbox.insert(tk.END, f"      Original\t\tCorrected")
+    treeView.delete(*treeView.get_children())
     for i,(x,y) in enumerate(zip(originalData, correctedData)):
-      pointsListbox.insert(tk.END, f"M.{i}: {x:.0f}\t{y:.1f}")
+      treeView.insert("" , i, text=f"M.{i}", values=(f"{x:.0f}", f"{y:.1f}"))
 
 
 
@@ -979,7 +984,7 @@ class MSAnalyzer:
 
 if __name__ == '__main__':
 
-  dvt = True
+  dvt = False
   if (dvt):
     filenames = ["data/180530ETV22_37Liv_FAMES-labeled.xlsx", "data/template_labeled.xlsx"]
     appData = MSDataContainer(filenames)
