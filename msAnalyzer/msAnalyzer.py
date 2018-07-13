@@ -285,7 +285,7 @@ class MSDataContainer:
     assert len(df_TemplateInfo)==len(df_Data), \
     f"The number of declared samples in the template (n={len(df_TemplateInfo)}) does not match the number of samples detected in the data file (n={len(df_Data)})"
 
-    return pd.concat([df_Meta, df_TemplateInfo, df_Data], axis=1).fillna(0)
+    return pd.concat([df_Meta, df_TemplateInfo, df_Data.fillna(0)], axis=1)
 
   def __getOrderedDfBasedOnTemplate(self, df, templateMap):
     '''Get new df_Data and df_Meta based on template'''
@@ -651,7 +651,7 @@ class MSAnalyzer:
 
     # - - - - - - - - - - - - - - - - - - - - -
     # Quit button in the upper right corner
-    quit_button = ttk.Button(self.window, text="Quit", command=self.window.destroy)
+    quit_button = ttk.Button(self.window, text="Quit", command=lambda: self.quitApp(self.window))
     quit_button.grid(row=1, column=4)
 
     if self.dataObject.experimentType == "Labeled":
@@ -694,6 +694,10 @@ class MSAnalyzer:
       inspectCorrectionButton = ttk.Button(Correctionframe, text="Inspect NA correction", command=lambda: self.inspectCorrectionPlots())
       inspectCorrectionButton.grid(row=13, column=2, columnspan=2, pady=5)
   
+  def quitApp(self, window):
+    # close Matplotlib processes if any
+    plt.close('all')
+    window.destroy()
 
   def popupMsg(self, msg):
     '''Popup message window'''
