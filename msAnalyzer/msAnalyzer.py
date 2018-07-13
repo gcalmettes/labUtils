@@ -360,25 +360,31 @@ class MSDataContainer:
   def updateTracer(self, newTracer):
     self.tracer = newTracer
     print(f"The tracer has been updated to {newTracer}")
-    self.dataDf_corrected = self.correctForNaturalAbundance()
+    self.computeNACorrectionDf()
 
   def updateTracerPurity(self, newPurity):
     self.tracerPurity = newPurity
-    self.dataDf_corrected = self.correctForNaturalAbundance()
+    self.computeNACorrectionDf()
 
   def updateNACMethod(self, newMethod):
     self.NACMethod = newMethod
     print(f"The correction method for natural abundance has been updated to {newMethod}")
+    self.computeNACorrectionDf()
+
+  def computeNACorrectionDf(self):
     self.dataDf_corrected = self.correctForNaturalAbundance()
+    self.dataDf_labeledProportions = self.calculateLabeledProportionForAll()
 
   def computeNormalizedData(self):
     '''Normalize the data to the internal ref'''
     if self.experimentType == "Not Labeled":
       dataDf_norm = self.dataDf.copy()
       dataDf_norm.iloc[:, 7:] = dataDf_norm.iloc[:, 7:].values/dataDf_norm[self.internalRef].values[:, np.newaxis]
-      return dataDf_norm
     else:
-      print("need to implement normalization for Labeled experiments")
+      sumFracDf = self.calculateSumIonsForAll()
+      sumFracDf = pd.DataFrame(columns=sumFracDf.columns, data=sumFracDf.values/sumFracDf[self.internalRef].values[:, np.newaxis])
+      dataDf_norm = pd.concat([self.dataDf.iloc[:,:7], sumFracDf], axis=1)
+    return dataDf_norm
 
   def correctForNaturalAbundance(self):
     correctedData = self.dataDf.iloc[:,:7]
@@ -390,10 +396,28 @@ class MSDataContainer:
         correctedData = pd.concat([correctedData, ionMID], axis=1)
         continue
       ionNA = NAProcess(parentalIon, self.tracer, purityTracer=self.tracerPurity)
-      correctedData = pd.concat([correctedData, ionNA.correctForNaturalAbundance(ionMID, method=self.NACMethod)], axis=1)
+      correctedIonData = ionNA.correctForNaturalAbundance(ionMID, method=self.NACMethod)
+      correctedData = pd.concat([correctedData, correctedIonData], axis=1)
+
     print(f"The MIDs have been corrected using the {self.NACMethod} method (tracer: {self.tracer}, purity: {self.tracerPurity})")
     return correctedData
 
+  def calculateSumIonsForAll(self):
+    '''Return df of the summed fractions for all the ions'''
+    sumFrac = pd.concat([self.dataDf.filter(regex=parentalIon).sum(axis=1) for parentalIon in self.internalRefList], axis=1)
+    sumFrac.columns = self.internalRefList
+    return sumFrac
+
+  def calculateLabeledProportion(self, df):
+    '''Calculate the proportion of labeling in non-parental ions (M.0 must be first column).'''
+    total = df.sum(axis=1)
+    return (total - df.iloc[:,0])/total
+
+  def calculateLabeledProportionForAll(self):
+    '''Return df of the labeling proportions for all the ions'''
+    proportions = pd.concat([self.calculateLabeledProportion(self.dataDf_corrected.filter(regex=parentalIon)) for parentalIon in self.internalRefList], axis=1)
+    proportions.columns = self.internalRefList
+    return pd.concat([self.dataDf.iloc[:,:7], proportions], axis=1)
 
   def saveStandardCurvesAndResults(self, useMask=False):
     # get current folder and create result folder if needed
@@ -428,7 +452,6 @@ class MSDataContainer:
         # fit of data
         xvals = self.standardDf_nMoles[carbon].values
         yvals = stdAbsorbance[col].values
-        # print(carbon)
         
         if not useMask:
           mask = [~np.logical_or(np.isnan(x), np.isnan(y)) for x,y in zip(xvals, yvals)]
@@ -868,7 +891,7 @@ class MSAnalyzer:
       nonlocal currentCorrectionIdx
       if (currentCorrectionIdx+direction>=0) & (currentCorrectionIdx+direction<len(self.FANames)):
         currentCorrectionIdx = currentCorrectionIdx+direction
-        self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas)
+        self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas, correctionListBox)
         nextButton["text"]="Next" # in case we come from last plot
         if currentCorrectionIdx == len(self.FANames)-1:
           # last plot
@@ -880,7 +903,7 @@ class MSAnalyzer:
         quitCurrent()
 
     def showNewSampleSelection(event):
-      self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas)
+      self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas, correctionListBox)
     
     plotFrame = tk.Tk()
     plotFrame.wm_title("Natural Abundance Correction inspector")
@@ -896,29 +919,32 @@ class MSAnalyzer:
     # so I directly bind to a function on change
     SampleList.bind("<<ComboboxSelected>>", showNewSampleSelection)
 
+        # table display
+    correctionListBox = tk.Listbox(plotFrame, height=15, selectmode='multiple')
+    correctionListBox.grid(row=2, column=8, columnspan=3, pady=5, padx=10)
+
     # Main fig
-    fig,ax = plt.subplots(figsize=(7,3))
+    fig,ax = plt.subplots(figsize=(6,3))
     canvas = FigureCanvasTkAgg(fig, plotFrame)
-    self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas)
+    self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas, correctionListBox)
     fig.tight_layout()
     figFrame = canvas.get_tk_widget()#.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
-    figFrame.grid(row=2, column=1, columnspan=8, rowspan=3, pady=10, padx=10)
+    figFrame.grid(row=2, column=1, columnspan=7, rowspan=3, pady=10, padx=10)
 
     # buttons and others
     quitButton = ttk.Button(plotFrame, text="Quit", command = lambda: quitCurrent())
     quitButton.grid(row=5, column=1, pady=5)
     
     previousButton = ttk.Button(plotFrame, text="Previous", command = lambda: goToNextPlot(-1))
-    previousButton.grid(row=5, column=7, pady=5)
+    previousButton.grid(row=5, column=6, pady=5)
     nextButton = ttk.Button(plotFrame, text="Next", command = lambda: goToNextPlot(1))
-    nextButton.grid(row=5, column=8, pady=5)
+    nextButton.grid(row=5, column=7, pady=5)
 
-  def plotIsolatedCorrection(self, famesName, sampleName, ax, canvas):
+  def plotIsolatedCorrection(self, famesName, sampleName, ax, canvas, pointsListbox):
     ax.clear()
 
     # get row associated with sampleName provided
     row = np.where(self.dataObject.dataDf["Name"] == sampleName.split(" ")[0])[0][0]
-    print(row)
 
     originalData = self.dataObject.dataDf.filter(regex=famesName).iloc[row]
     correctedData = self.dataObject.dataDf_corrected.filter(regex=famesName).iloc[row]
@@ -939,6 +965,12 @@ class MSAnalyzer:
 
     canvas.draw()
 
+    # clear and update table
+    pointsListbox.delete(0, tk.END)
+    pointsListbox.insert(tk.END, f"      Original\t\tCorrected")
+    for i,(x,y) in enumerate(zip(originalData, correctedData)):
+      pointsListbox.insert(tk.END, f"M.{i}: {x:.0f}\t{y:.1f}")
+
 
 
 ############################
@@ -947,52 +979,62 @@ class MSAnalyzer:
 
 if __name__ == '__main__':
 
-  # Is the directory to look in for data files defined?
-  if len(sys.argv) == 1: # no arguments given to the function
-    initialDirectory = False
+  dvt = False
+  if (dvt):
+    filenames = ["data/180530ETV22_37Liv_FAMES-labeled.xlsx", "data/template_labeled.xlsx"]
+    appData = MSDataContainer(filenames)
+    appData.computeNACorrectionDf()
+    appData.dataDf_labeledProportions.to_excel("test_labeledProportions.xlsx")
+    # appData.dataDf_corrected = appData.correctForNaturalAbundance()
+
   else:
-    initialDirectory = sys.argv[1]
 
-  # Choose data and template files
-  fileNames = initialFileChoser(initialDirectory)
+    # Is the directory to look in for data files defined?
+    if len(sys.argv) == 1: # no arguments given to the function
+      initialDirectory = False
+    else:
+      initialDirectory = sys.argv[1]
 
-
-  # The container that will hold all the data
-  appData = MSDataContainer(fileNames)
-
-  print(f"""Two files have been loaded:
-    \tData file: {appData.dataFileName}
-    \tTemplate file: {appData.templateFileName}""")
-  print(f"The experiment type detected is '{appData.experimentType}'")
+    # Choose data and template files
+    fileNames = initialFileChoser(initialDirectory)
 
 
-  # Create the entire GUI program and pass in colNames for popup menu
-  app = MSAnalyzer(appData)
+    # The container that will hold all the data
+    appData = MSDataContainer(fileNames)
 
-  # Start the GUI event loop
-  app.window.mainloop()
-
-
-  # print(appData.volumeMixTotal, appData.volumeMixForPrep, appData.volumeSample)
-  # print(appData.volumeStandards)
-  # print(appData.internalRefList)
-  # appData.dataDf.to_excel("test.xlsx")
-  # appData.dataDf_corrected.to_excel("test_correctedGC.xlsx")
+    print(f"""Two files have been loaded:
+      \tData file: {appData.dataFileName}
+      \tTemplate file: {appData.templateFileName}""")
+    print(f"The experiment type detected is '{appData.experimentType}'")
 
 
-  ###################################
-  # Natural Abundance Correction test
+    # Create the entire GUI program and pass in colNames for popup menu
+    app = MSAnalyzer(appData)
 
-  # data = pd.read_excel("test.xlsx").filter(regex="C14")
-  # naProcess = NAProcess(data.columns[0], "C")
+    # Start the GUI event loop
+    app.window.mainloop()
 
-  # df_SMC = naProcess.correctForNaturalAbundance(data, method="SMC")
-  # df_LSC = naProcess.correctForNaturalAbundance(data, method="LSC")
-  
-  # df_SMC.to_excel("test_SMC.xlsx", index=False)
-  # df_LSC.to_excel("test_LSC.xlsx", index=False)
 
-  # test = NAProcess("C14:0", "C")
-  # print(test.correctionMatrix)
+    # print(appData.volumeMixTotal, appData.volumeMixForPrep, appData.volumeSample)
+    # print(appData.volumeStandards)
+    # print(appData.internalRefList)
+    # appData.dataDf.to_excel("test.xlsx")
+    # appData.dataDf_corrected.to_excel("test_correctedGC.xlsx")
+
+
+    ###################################
+    # Natural Abundance Correction test
+
+    # data = pd.read_excel("test.xlsx").filter(regex="C14")
+    # naProcess = NAProcess(data.columns[0], "C")
+
+    # df_SMC = naProcess.correctForNaturalAbundance(data, method="SMC")
+    # df_LSC = naProcess.correctForNaturalAbundance(data, method="LSC")
+    
+    # df_SMC.to_excel("test_SMC.xlsx", index=False)
+    # df_LSC.to_excel("test_LSC.xlsx", index=False)
+
+    # test = NAProcess("C14:0", "C")
+    # print(test.correctionMatrix)
 
 
