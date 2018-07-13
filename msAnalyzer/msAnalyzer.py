@@ -866,26 +866,25 @@ class MSAnalyzer:
   def plotIsolatedFAMES(self, famesName, ax, canvas, pointsListbox, direction=1):
     ax.clear()
 
-    if direction == 1:
-      pointsListbox.selection_clear(0, tk.END)
-
     carbon = re.findall(r"(C\d+:\d+)", famesName)[0]
-    maskSelected = [not (i in pointsListbox.curselection()) for i in range(len(self.dataObject.standardDf_nMoles[carbon].values))]
-    newMask = [(m1 & m2) for m1,m2 in zip(self.dataObject._maskFAMES[famesName]["originalMask"], maskSelected)]
-    self.dataObject._maskFAMES[famesName]["newMask"] = newMask
-
     xvals = self.dataObject.standardDf_nMoles[carbon].values
     yvals = self.dataObject.getStandardAbsorbance()[famesName].values
 
-    pointsListbox.delete(0, tk.END)
-    for i,(x,y) in enumerate(zip(xvals, yvals)):
-      if y==0:
-        # nan are converted to zero when initial cleaned dataDf is created, so just show
-        # that those were in fact nans
-        y = 'NAN'
-      else:
-        y = f"{y:.3f}"
-      pointsListbox.insert(tk.END, f" point{i}: ({x:.3f}, {y})")
+    if direction == 1:
+      # if coming from another plot, start with a fresh ListBox
+      pointsListbox.delete(0, tk.END)
+      for i,(x,y) in enumerate(zip(xvals, yvals)):
+        if y==0:
+          # nan are converted to zero when initial cleaned dataDf is created, so just show
+          # that those were in fact nans
+          y = 'NAN'
+        else:
+          y = f"{y:.3f}"
+        pointsListbox.insert(tk.END, f" point{i}: ({x:.3f}, {y})")
+
+    maskSelected = [not (i in pointsListbox.curselection()) for i in range(len(self.dataObject.standardDf_nMoles[carbon].values))]
+    newMask = [(m1 & m2) for m1,m2 in zip(self.dataObject._maskFAMES[famesName]["originalMask"], maskSelected)]
+    self.dataObject._maskFAMES[famesName]["newMask"] = newMask
 
     # select points that were invalid in original mask
     alreadyMaskedIndices = [i for i,boolean in enumerate(self.dataObject._maskFAMES[famesName]["originalMask"]) if boolean==False]
