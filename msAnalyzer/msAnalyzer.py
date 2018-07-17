@@ -443,33 +443,127 @@ class MSDataContainer:
     return pd.concat([self.dataDf.iloc[:,:7], proportions], axis=1)
 
   def saveStandardCurvesAndResults(self, useMask=False):
-    # get current folder and create result folder if needed
-    savePath = self.__makeResultFolder()
-    
-    # will store final results
-    resultsDf = pd.DataFrame(index=self.dataDf_norm.index)
 
-    # Plot of Standard
+    self.dataDf_quantification = self.computeQuantificationFromStandardFits(useMask=useMask)
     stdAbsorbance = self.getStandardAbsorbance().iloc[:,7:]
-    assert len(stdAbsorbance) == len(self.standardDf_nMoles),\
-    f"The number of standards declared in the STANDARD_{'_'.join(self.experimentType.upper().split(' '))} sheet (n={len(self.standardDf_nMoles)}) is different than the number of standards declared in the data file (n={len(stdAbsorbance)})"
-    
-    nTotal = len(stdAbsorbance.columns)
+    quantificationDf = self.dataDf_quantification.iloc[:, 3:]
+
+    nTotal = len(quantificationDf.columns)
+    # grid of plots
     nCols = 4
     if nTotal%4==0:
       nRows = int(nTotal/nCols)
     else:
       nRows = int(np.floor(nTotal/nCols)+1)
 
-    fig1,axes = plt.subplots(ncols=nCols, nrows=nRows, figsize=(20, nRows*4))
+    # fig1 (only standards) and fig2 (standards + calculated FAMES concentration)
+    fig1,axes1 = plt.subplots(ncols=nCols, nrows=nRows, figsize=(20, nRows*4))
+    fig2,axes2 = plt.subplots(ncols=nCols, nrows=nRows, figsize=(20, nRows*4))
 
     if not useMask:
-      self._maskFAMES = {}
       extension = ""
     else:
       extension = "_modified"
 
-    for i,(col,ax) in enumerate(zip(stdAbsorbance.columns,  axes.ravel())):
+    for i,(col,ax1,ax2) in enumerate(zip(quantificationDf.columns,  axes1.ravel(), axes2.ravel())):
+      carbon = re.findall(r"(C\d+:\d+)", col)[0]
+      # get slope/intercept from the FAMES standard
+      slope,intercept = self.standardDf_fitResults.loc[["slope", "intercept"], col]
+      
+      # standards values and fits
+      xvals = self.standardDf_nMoles[carbon].values
+      yvals = stdAbsorbance[col].values
+      try:
+        mask = self._maskFAMES[col]["newMask"]
+      except:
+        mask = self._maskFAMES[col]["originalMask"]
+      xfit = [np.min(xvals), np.max(xvals)]
+      yfit = np.polyval([slope, intercept], xfit)
+      
+      # Fig 1 
+      ax1.plot(xvals[mask], yvals[mask], "o")
+      ax1.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "o", mfc="none", color="black", mew=2)
+      ax1.plot(xfit, yfit, "red")
+      ax1.text(ax1.get_xlim()[0]+(ax1.get_xlim()[1]-ax1.get_xlim()[0])*0.05, ax1.get_ylim()[0]+(ax1.get_ylim()[1]-ax1.get_ylim()[0])*0.9, f"R2={stats.pearsonr(xvals[mask], yvals[mask])[0]**2:.4f}", size=14, color="purple")
+      ax1.text(ax1.get_xlim()[0]+(ax1.get_xlim()[1]-ax1.get_xlim()[0])*0.97, ax1.get_ylim()[0]+(ax1.get_ylim()[1]-ax1.get_ylim()[0])*0.05, f"y={slope:.4f}x+{intercept:.4f}", size=14, color="red", ha="right")
+      ax1.set_title(col)
+      ax1.set_xlabel("Quantity (nMoles)")
+      ax1.set_ylabel("Absorbance")
+
+      # Fig 2
+      ax2.plot(xvals[mask], yvals[mask], "o")
+      ax2.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "x", color="black", ms=3)
+      ax2.plot(xfit, yfit, "red")
+      # add values calculated from curve (visually adjust for normalization by weight done above)
+      ax2.plot(quantificationDf[col], self.dataDf_norm[col], "o", alpha=0.3)
+      ax2.set_title(col)
+      ax2.set_xlabel("Quantity (nMoles)")
+      ax2.set_ylabel("Absorbance")
+    
+    fig1.tight_layout()
+    fig2.tight_layout()
+    
+    #####################
+    # Save data and figures
+
+    # get current folder and create result folder if needed
+    savePath = self.__makeResultFolder()
+
+    # save figures
+    fig1.savefig(f"{savePath}/standard-fit{extension}.pdf")
+    fig2.savefig(f"{savePath}/standard-fit-with-data{extension}.pdf")
+    # close Matplotlib processes
+    plt.close('all')
+
+    # Create a Pandas Excel writer using XlsxWriter as the engine.
+    writer = pd.ExcelWriter(f"{savePath}/results{extension}.xlsx", engine='xlsxwriter')
+
+    # Write each dataframe to a different worksheet.
+    if self.experimentType == "Not Labeled":
+      normalization = self.dataDf_norm["SampleWeight"]
+    else:
+      # uL of liver soup used = 5uL (the initial liver was diluted in 750)
+      volOfDilution = 750
+      liverSoupVolUsed = 5
+      normalization = liverSoupVolUsed*self.dataDf_norm["SampleWeight"]/(volOfDilution+self.dataDf_norm["SampleWeight"])
+
+    self.dataDf_quantification.to_excel(writer, sheet_name='Abs_total', index=False)
+    resNorm = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], quantificationDf.divide(normalization, axis=0)], axis=1)
+    resNorm.to_excel(writer, sheet_name='Abs_total_norm', index=False)
+    if self.experimentType == "Labeled":
+      newlySynthetizedMoles = quantificationDf*self.dataDf_labeledProportions[quantificationDf.columns]
+      res_newlySynthetizedMoles = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], newlySynthetizedMoles], axis=1)
+      # uL of liver soup used = 5uL (the initial liver was diluted in 750)
+      volOfDilution = 750
+      liverSoupVolUsed = 5
+      res_newlySynthetizedMoles_norm = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], newlySynthetizedMoles.divide(normalization, axis=0)], axis=1)
+      res_newlySynthetizedMoles.to_excel(writer, sheet_name='Abs_synthetized', index=False)
+      res_newlySynthetizedMoles_norm.to_excel(writer, sheet_name='Abs_synthetized_norm', index=False)
+    self.dataDf.to_excel(writer, sheet_name='Initial Data', index=False)
+    self.dataDf_norm.to_excel(writer, sheet_name='Normalized Data', index=False)
+  
+    # Close the Pandas Excel writer and output the Excel file.
+    writer.save()
+    
+    print(f"The standard curves have been saved at {savePath}/standard-fit{extension}.pdf")
+    print(f"The results calculated from the standard regression lines have been saved at {savePath}/standard-fit-with-data{extension}.pdf")
+    print(f"The analysis results have been saved at {savePath}/results{extension}.xls")
+
+  def computeStandardFits(self, useMask=False):
+    ''' Return a dataFrame of the slope/intercept for all the valid standards'''
+    
+    # will store final results
+    fitDf = pd.DataFrame(index=["slope", "intercept"])
+
+    # Plot of Standard
+    stdAbsorbance = self.getStandardAbsorbance().iloc[:,7:]
+    assert len(stdAbsorbance) == len(self.standardDf_nMoles),\
+    f"The number of standards declared in the STANDARD_{'_'.join(self.experimentType.upper().split(' '))} sheet (n={len(self.standardDf_nMoles)}) is different than the number of standards declared in the data file (n={len(stdAbsorbance)})"
+
+    if not useMask:
+      self._maskFAMES = {}
+
+    for i,col in enumerate(stdAbsorbance.columns):
       carbon = re.findall(r"(C\d+:\d+)", col)[0]
       if carbon in self.standardDf_nMoles.columns:
         # fit of data
@@ -488,85 +582,24 @@ class MSDataContainer:
           except:
             mask = self._maskFAMES[col]["originalMask"]
 
-        slope,intercept = np.polyfit(np.array(xvals[mask], dtype=float), np.array(yvals[mask], dtype=float), 1)
-        xfit = [np.min(xvals), np.max(xvals)]
-        yfit = np.polyval([slope, intercept], xfit)
-        # plot of data
-        ax.plot(xvals[mask], yvals[mask], "o")
-        ax.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "o", mfc="none", color="black", mew=2)
-        ax.plot(xfit, yfit, "red")
-        ax.text(ax.get_xlim()[0]+(ax.get_xlim()[1]-ax.get_xlim()[0])*0.05, ax.get_ylim()[0]+(ax.get_ylim()[1]-ax.get_ylim()[0])*0.9, f"R2={stats.pearsonr(xvals[mask], yvals[mask])[0]**2:.4f}", size=14, color="purple")
-        ax.text(ax.get_xlim()[0]+(ax.get_xlim()[1]-ax.get_xlim()[0])*0.97, ax.get_ylim()[0]+(ax.get_ylim()[1]-ax.get_ylim()[0])*0.05, f"y={slope:.4f}x+{intercept:.4f}", size=14, color="red", ha="right")
-        # calculate final results and save
-        resultsDf[col] = ((self.dataDf_norm[col]-intercept)/slope)#/self.dataDf_norm["SampleWeight"]
-      ax.set_title(col)
-      ax.set_xlabel("Quantity (nMoles)")
-      ax.set_ylabel("Absorbance")
-
-    fig1.tight_layout()
-
-    # Plot of results on standard curves
-    nTotal = len(resultsDf.filter(regex="C[0-9]").columns)
-    nCols = 4
-    if nTotal%4==0:
-      nRows = int(nTotal/nCols)
-    else:
-      nRows = int(np.floor(nTotal/nCols)+1)
-
-    fig2,axes = plt.subplots(ncols=nCols, nrows=nRows, figsize=(20, nRows*4))
-
-    for i,(col,ax) in enumerate(zip(resultsDf.filter(regex="C[0-9]").columns,  axes.ravel())):
-      carbon = re.findall(r"(C\d+:\d+)", col)[0]
-      if carbon in self.standardDf_nMoles.columns:
-        # fit of data
-        xvals = self.standardDf_nMoles[carbon].values
-        yvals = stdAbsorbance[col].values
-        try:
-          mask = self._maskFAMES[col]["newMask"]
-        except:
-          mask = self._maskFAMES[col]["originalMask"]
-        slope,intercept = np.polyfit(np.array(xvals[mask], dtype=float), np.array(yvals[mask], dtype=float), 1)
-        xfit = [np.min(xvals), np.max(xvals)]
-        yfit = np.polyval([slope, intercept], xfit)
-        # plot of data  
-        ax.plot(xvals[mask], yvals[mask], "o")
-        ax.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "x", color="black", ms=3)
-        ax.plot(xfit, yfit, "red")
-        # plot values calculated from curve (visually adjust for normalization by weight done above)
-        ax.plot(resultsDf[col], self.dataDf_norm[col], "o", alpha=0.3)
-      ax.set_title(col)
-      ax.set_xlabel("Quantity (nMoles)")
-      ax.set_ylabel("Absorbance")
-
-    fig2.tight_layout()
+        fitDf[col] = np.polyfit(np.array(xvals[mask], dtype=float), np.array(yvals[mask], dtype=float), 1)
     
-    ############
-    # Save data
+    # save fits
+    self.standardDf_fitResults = fitDf
 
-    # Create a Pandas Excel writer using XlsxWriter as the engine.
-    writer = pd.ExcelWriter(f"{savePath}/results{extension}.xlsx", engine='xlsxwriter')
+    return fitDf
 
-    # Write each dataframe to a different worksheet.
-    resNorm = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], resultsDf.divide(self.dataDf_norm["SampleWeight"], axis=0)], axis=1)
-    resNorm.to_excel(writer, sheet_name='Results Normalized', index=False)
-    res = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], resultsDf], axis=1)
-    res.to_excel(writer, sheet_name='Results', index=False)
-    self.dataDf.to_excel(writer, sheet_name='Initial Data', index=False)
-    self.dataDf_norm.to_excel(writer, sheet_name='Normalized Data', index=False)
+  def computeQuantificationFromStandardFits(self, useMask=False):
+    '''Use fits (slope/intercept) of standards to quantify FAMES from absorbance'''
+    standardFits = self.computeStandardFits(useMask=useMask)
+    # will store final results
+    resultsDf = pd.DataFrame(index=self.dataDf_norm.index)
 
-    # Close the Pandas Excel writer and output the Excel file.
-    writer.save()
+    for i,col in enumerate(standardFits.columns):
+      slope,intercept = standardFits.loc[["slope", "intercept"], col]
+      resultsDf[col] = ((self.dataDf_norm[col]-intercept)/slope)
 
-    fig1.savefig(f"{savePath}/standard-fit{extension}.pdf")
-    fig2.savefig(f"{savePath}/standard-fit-with-data{extension}.pdf")
-    
-    print(f"The standard curves have been saved at {savePath}/standard-fit{extension}.pdf")
-    print(f"The results calculated from the standard regression lines have been saved at {savePath}/standard-fit-with-data{extension}.pdf")
-    print(f"The analysis results have been saved at {savePath}/results{extension}.xls")
-    
-    # close Matplotlib processes
-    plt.close('all')
-
+    return pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], resultsDf], axis=1)
 
 
 
@@ -1044,16 +1077,13 @@ class MSAnalyzer:
 
 if __name__ == '__main__':
 
-  dvt = True
+  dvt = False
   if (dvt):
     filenames = ["data/180530ETV22_37Liv_FAMES-labeled.xlsx", "data/template_labeled.xlsx"]
     appData = MSDataContainer(filenames)
     appData.updateStandards(40, 500, [1, 5, 10, 20, 40, 80])
     appData.computeNACorrectionDf()
     appData.updateInternalRef(appData.internalRef)
-    
-
-
 
   else:
 
