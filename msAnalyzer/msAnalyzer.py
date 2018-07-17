@@ -1092,6 +1092,8 @@ class MSAnalyzer:
       if not os.path.exists(directory):
         os.mkdir(directory)
 
+      fig,ax = plt.subplots(figsize=(6,3))
+
       for i in range(len(originalData)):
         orData = originalData.iloc[i]
         corData = correctedData.iloc[i]
@@ -1101,20 +1103,21 @@ class MSAnalyzer:
         xrange = np.arange(len(orData))
         barWidth = 0.4
 
-        fig,ax = plt.subplots(figsize=(6,3))
+        # clear axe each time
+        ax.clear()
         ax.bar(xrange-barWidth/2, orData, barWidth, color="#B4B4B4", label="Original")
         ax.bar(xrange+barWidth/2, corData, barWidth, color="#00BFFF", label="Corrected")
         ax.set_xticks(xrange)
         ax.set_xticklabels(xLabels)
         ax.legend()
 
-        ax.set_ylabel("Absorbance")
         ax.set_title(f"{name} - {self.dataObject.dataDf.iloc[i, 2]} {self.dataObject.dataDf.iloc[i, 3]}")
-
+        ax.set_ylabel("Absorbance")
+        
         fig.tight_layout()
 
         fig.savefig(f"{directory}/{self.dataObject.dataDf.iloc[i, 2]}")
-        plt.close()
+      plt.close("all")
 
 
 ############################
