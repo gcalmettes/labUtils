@@ -1039,6 +1039,9 @@ class MSAnalyzer:
     nextButton = ttk.Button(plotFrame, text="Next", command = lambda: goToNextPlot(1))
     nextButton.grid(row=5, column=7, pady=5)
 
+    saveButton = ttk.Button(plotFrame, text="Save all plots", command = lambda: self.saveAllCorrectionPlots())
+    saveButton.grid(row=5, column=10, columnspan=2, pady=5)
+
   def plotIsolatedCorrection(self, famesName, sampleName, ax, canvas, treeView):
     ax.clear()
 
@@ -1069,6 +1072,49 @@ class MSAnalyzer:
     for i,(x,y) in enumerate(zip(originalData, correctedData)):
       treeView.insert("" , i, text=f"M.{i}", values=(f"{x:.0f}", f"{y:.1f}"))
 
+  def saveAllCorrectionPlots(self):
+    # create folder if it doesn't exist
+    directory = f"{self.dataObject.pathDirName}/correctionPlots"
+    if not os.path.exists(directory):
+      os.mkdir(directory)
+
+    for name in self.FANames:
+
+      originalData = self.dataObject.dataDf.filter(regex=name)
+      correctedData = self.dataObject.dataDf_corrected.filter(regex=name)
+      
+      # if only one column, it means it was not a Fames with non parental ions
+      if len(originalData.columns)==1:
+        continue
+
+      # create folder if doesn't exist
+      directory = f"{self.dataObject.pathDirName}/correctionPlots/{'-'.join(name.split(':'))}"
+      if not os.path.exists(directory):
+        os.mkdir(directory)
+
+      for i in range(len(originalData)):
+        orData = originalData.iloc[i]
+        corData = correctedData.iloc[i]
+
+        # make x labels
+        xLabels = [f"M.{i}" for i in range(len(orData))]
+        xrange = np.arange(len(orData))
+        barWidth = 0.4
+
+        fig,ax = plt.subplots(figsize=(6,3))
+        ax.bar(xrange-barWidth/2, orData, barWidth, label="Original")
+        ax.bar(xrange+barWidth/2, corData, barWidth, label="Corrected")
+        ax.set_xticks(xrange)
+        ax.set_xticklabels(xLabels)
+        ax.legend()
+
+        ax.set_ylabel("Absorbance")
+        ax.set_title(f"{name} - {self.dataObject.dataDf.iloc[i, 2]} {self.dataObject.dataDf.iloc[i, 3]}")
+
+        fig.tight_layout()
+
+        fig.savefig(f"{directory}/{self.dataObject.dataDf.iloc[i, 2]}")
+        plt.close()
 
 
 ############################
@@ -1111,28 +1157,5 @@ if __name__ == '__main__':
 
     # Start the GUI event loop
     app.window.mainloop()
-
-
-    # print(appData.volumeMixTotal, appData.volumeMixForPrep, appData.volumeSample)
-    # print(appData.volumeStandards)
-    # print(appData.internalRefList)
-    # appData.dataDf.to_excel("test.xlsx")
-    # appData.dataDf_corrected.to_excel("test_correctedGC.xlsx")
-
-
-    ###################################
-    # Natural Abundance Correction test
-
-    # data = pd.read_excel("test.xlsx").filter(regex="C14")
-    # naProcess = NAProcess(data.columns[0], "C")
-
-    # df_SMC = naProcess.correctForNaturalAbundance(data, method="SMC")
-    # df_LSC = naProcess.correctForNaturalAbundance(data, method="LSC")
-    
-    # df_SMC.to_excel("test_SMC.xlsx", index=False)
-    # df_LSC.to_excel("test_LSC.xlsx", index=False)
-
-    # test = NAProcess("C14:0", "C")
-    # print(test.correctionMatrix)
 
 
