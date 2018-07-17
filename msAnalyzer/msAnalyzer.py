@@ -242,7 +242,7 @@ class MSDataContainer:
     self.__standardDf_template = self.__getStandardsTemplateDf()
     self.volumeMixTotal = 500
     self.volumeMixForPrep = 100
-    self.volumeSample = 100
+    # self.volumeSample = 100
     self.volumeStandards = [1, 5, 10, 20, 40, 80]
 
     self.standardDf_nMoles = self.computeStandardMoles()
@@ -659,12 +659,12 @@ class MSAnalyzer:
     # variables declaration
     self.volTotalVar = tk.IntVar()
     self.volMixVar = tk.IntVar()
-    self.volSampleVar = tk.IntVar()
+    # self.volSampleVar = tk.IntVar()
     self.stdVols = self.dataObject.volumeStandards
 
     self.volTotalVar.set(self.dataObject.volumeMixTotal)
     self.volMixVar.set(self.dataObject.volumeMixForPrep)
-    self.volSampleVar.set(self.dataObject.volumeSample)
+    # self.volSampleVar.set(self.dataObject.volumeSample)
 
     # Vol mix total
     self.volTotalVar.trace('w', lambda index,value,op : self.__updateVolumeMixTotal(self.volTotalVar.get()))
@@ -680,12 +680,12 @@ class MSAnalyzer:
     volMixLabel = tk.Label(Standardframe, text="Vol. Mix", fg="black", bg="#ECECEC")
     volMixLabel.grid(row=6, column=1, sticky=tk.W)
 
-    # Vol sample
-    self.volSampleVar.trace('w', lambda index,value,op : self.__updateVolumeSample(self.volSampleVar.get()))
-    volSampleSpinbox = tk.Spinbox(Standardframe, from_=0, to=1000, width=5, textvariable=self.volSampleVar, command= lambda: self.__updateVolumeSample(self.volSampleVar.get()), justify=tk.RIGHT)
-    volSampleSpinbox.grid(row=7, column=2, sticky=tk.W, pady=3)
-    volSampleLabel = tk.Label(Standardframe, text="Vol. Sample", fg="black", bg="#ECECEC")
-    volSampleLabel.grid(row=7, column=1, sticky=tk.W)
+    # # Vol sample
+    # self.volSampleVar.trace('w', lambda index,value,op : self.__updateVolumeSample(self.volSampleVar.get()))
+    # volSampleSpinbox = tk.Spinbox(Standardframe, from_=0, to=1000, width=5, textvariable=self.volSampleVar, command= lambda: self.__updateVolumeSample(self.volSampleVar.get()), justify=tk.RIGHT)
+    # volSampleSpinbox.grid(row=7, column=2, sticky=tk.W, pady=3)
+    # volSampleLabel = tk.Label(Standardframe, text="Vol. Sample", fg="black", bg="#ECECEC")
+    # volSampleLabel.grid(row=7, column=1, sticky=tk.W)
 
     # Standards uL
     StandardVols = CustomText(Standardframe, height=7, width=15)
@@ -693,14 +693,21 @@ class MSAnalyzer:
     StandardVols.insert(tk.END, "Standards (ul)\n"+"".join([f"{vol}\n" for vol in self.stdVols]))
     StandardVols.bind("<<TextModified>>", self.__updateVolumeStandards)
 
-    # Compute Results button
-    computeResultsButton = ttk.Button(Standardframe, text="Compute results", command=lambda: self.computeResults())
-    computeResultsButton.grid(row=8, column=2, columnspan=2, pady=5)
-
     # - - - - - - - - - - - - - - - - - - - - -
+    # Actions frame
+    Actionframe = ttk.LabelFrame(self.window, text="Actions", relief=tk.RIDGE)
+    Actionframe.grid(row=1, column=4, columnspan=1, sticky=tk.E + tk.W + tk.N + tk.S, padx=2)
+    
     # Quit button in the upper right corner
-    quit_button = ttk.Button(self.window, text="Quit", command=lambda: self.quitApp(self.window))
-    quit_button.grid(row=1, column=4)
+    quit_button = ttk.Button(Actionframe, text="Quit", command=lambda: self.quitApp(self.window))
+    quit_button.grid(row=1, column=1)
+
+    # Compute Results button
+    ttk.Style().configure("multiLine.TButton", justify=tk.CENTER)
+    computeResultsButton = ttk.Button(Actionframe, style="multiLine.TButton", text="Compute\nresults", command=lambda: self.computeResults())
+    computeResultsButton.grid(row=2, column=1, pady=5)
+
+    
 
     if self.dataObject.experimentType == "Labeled":
       # - - - - - - - - - - - - - - - - - - - - -
@@ -778,9 +785,9 @@ class MSAnalyzer:
     self.dataObject.updateStandards(newVolumeMixForPrep, self.volTotalVar.get(), self.stdVols)
     print(f"The volumeMixForPrep has been updated to {newVolumeMixForPrep}")
 
-  def __updateVolumeSample(self, newVolumeSample):
-    self.dataObject.volumeSample = newVolumeSample
-    print(f"The volumeSample has been updated to {newVolumeSample}")
+  # def __updateVolumeSample(self, newVolumeSample):
+  #   self.dataObject.volumeSample = newVolumeSample
+  #   print(f"The volumeSample has been updated to {newVolumeSample}")
 
   def __updateVolumeStandards(self, event):
     newStdVols = [float(vol) for vol in re.findall(r"(?<!\d)\d+\.?\d*(?!\d)", event.widget.get("1.0", "end-1c"))]
@@ -1037,15 +1044,16 @@ class MSAnalyzer:
 
 if __name__ == '__main__':
 
-  dvt = False
+  dvt = True
   if (dvt):
     filenames = ["data/180530ETV22_37Liv_FAMES-labeled.xlsx", "data/template_labeled.xlsx"]
     appData = MSDataContainer(filenames)
+    appData.updateStandards(40, 500, [1, 5, 10, 20, 40, 80])
     appData.computeNACorrectionDf()
     appData.updateInternalRef(appData.internalRef)
-    # print(appData.getStandardAbsorbance().iloc[:,7:])
-    # appData.dataDf_labeledProportions.to_excel("test_labeledProportions.xlsx")
-    # appData.dataDf_corrected = appData.correctForNaturalAbundance()
+    
+
+
 
   else:
 
