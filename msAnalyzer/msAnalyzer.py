@@ -481,21 +481,21 @@ class MSDataContainer:
       yfit = np.polyval([slope, intercept], xfit)
       
       # Fig 1 
-      ax1.plot(xvals[mask], yvals[mask], "o")
+      ax1.plot(xvals[mask], yvals[mask], "o", color="#00BFFF")
       ax1.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "o", mfc="none", color="black", mew=2)
-      ax1.plot(xfit, yfit, "red")
-      ax1.text(ax1.get_xlim()[0]+(ax1.get_xlim()[1]-ax1.get_xlim()[0])*0.05, ax1.get_ylim()[0]+(ax1.get_ylim()[1]-ax1.get_ylim()[0])*0.9, f"R2={stats.pearsonr(xvals[mask], yvals[mask])[0]**2:.4f}", size=14, color="purple")
-      ax1.text(ax1.get_xlim()[0]+(ax1.get_xlim()[1]-ax1.get_xlim()[0])*0.97, ax1.get_ylim()[0]+(ax1.get_ylim()[1]-ax1.get_ylim()[0])*0.05, f"y={slope:.4f}x+{intercept:.4f}", size=14, color="red", ha="right")
+      ax1.plot(xfit, yfit, "-", color="#fb4c52")
+      ax1.text(ax1.get_xlim()[0]+(ax1.get_xlim()[1]-ax1.get_xlim()[0])*0.05, ax1.get_ylim()[0]+(ax1.get_ylim()[1]-ax1.get_ylim()[0])*0.9, f"R2={stats.pearsonr(xvals[mask], yvals[mask])[0]**2:.4f}", size=14, color="#ce4ad0")
+      ax1.text(ax1.get_xlim()[0]+(ax1.get_xlim()[1]-ax1.get_xlim()[0])*0.97, ax1.get_ylim()[0]+(ax1.get_ylim()[1]-ax1.get_ylim()[0])*0.05, f"y={slope:.4f}x+{intercept:.4f}", size=14, color="#fb4c52", ha="right")
       ax1.set_title(col)
       ax1.set_xlabel("Quantity (nMoles)")
       ax1.set_ylabel("Absorbance")
 
       # Fig 2
-      ax2.plot(xvals[mask], yvals[mask], "o")
+      ax2.plot(xvals[mask], yvals[mask], "o", color="#00BFFF")
       ax2.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "x", color="black", ms=3)
-      ax2.plot(xfit, yfit, "red")
+      ax2.plot(xfit, yfit, "-", color="#fb4c52")
       # add values calculated from curve (visually adjust for normalization by weight done above)
-      ax2.plot(quantificationDf[col], self.dataDf_norm[col], "o", alpha=0.3)
+      ax2.plot(quantificationDf[col], self.dataDf_norm[col], "o", color="#FF8B22", alpha=0.3)
       ax2.set_title(col)
       ax2.set_xlabel("Quantity (nMoles)")
       ax2.set_ylabel("Absorbance")
@@ -960,13 +960,13 @@ class MSAnalyzer:
       for idx in alreadyMaskedIndices:
         pointsListbox.select_set(idx)
 
-    ax.plot(xvals[newMask], yvals[newMask], "o")
-    ax.plot(xvals[[not i for i in newMask]], yvals[[not i for i in newMask]], "or")
+    ax.plot(xvals[newMask], yvals[newMask], "o", color="#00BFFF")
+    ax.plot(xvals[[not i for i in newMask]], yvals[[not i for i in newMask]], "o", color="#fb4c52")
     slope,intercept = np.polyfit(np.array(xvals[newMask], dtype=float), np.array(yvals[newMask], dtype=float), 1)
     xfit = [np.min(xvals), np.max(xvals)]
     yfit = np.polyval([slope, intercept], xfit)
     # plot of data
-    ax.plot(xfit, yfit, "purple")
+    ax.plot(xfit, yfit, "-", color="#B4B4B4")
     ax.set_title(famesName)
     ax.set_xlabel("Quantity (nMoles)")
     ax.set_ylabel("Absorbance")
@@ -1056,8 +1056,8 @@ class MSAnalyzer:
     xrange = np.arange(len(originalData))
     barWidth = 0.4
 
-    ax.bar(xrange-barWidth/2, originalData, barWidth, label="Original")
-    ax.bar(xrange+barWidth/2, correctedData, barWidth, label="Corrected")
+    ax.bar(xrange-barWidth/2, originalData, barWidth, color="#B4B4B4", label="Original")
+    ax.bar(xrange+barWidth/2, correctedData, barWidth, color="#00BFFF", label="Corrected")
     ax.set_xticks(xrange)
     ax.set_xticklabels(xLabels)
     ax.legend()
@@ -1102,8 +1102,8 @@ class MSAnalyzer:
         barWidth = 0.4
 
         fig,ax = plt.subplots(figsize=(6,3))
-        ax.bar(xrange-barWidth/2, orData, barWidth, label="Original")
-        ax.bar(xrange+barWidth/2, corData, barWidth, label="Corrected")
+        ax.bar(xrange-barWidth/2, orData, barWidth, color="#B4B4B4", label="Original")
+        ax.bar(xrange+barWidth/2, corData, barWidth, color="#00BFFF", label="Corrected")
         ax.set_xticks(xrange)
         ax.set_xticklabels(xLabels)
         ax.legend()
