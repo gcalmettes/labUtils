@@ -247,6 +247,12 @@ class MSDataContainer:
 
     self.standardDf_nMoles = self.computeStandardMoles()
 
+    # for normalization
+    # volume (uL) in which the original sample was diluted
+    self.volumesOfDilution = [750]*len(self.dataDf)
+    # volume (uL) of sample used in MS
+    self.volumesOfSampleSoupUsed = [5]*len(self.dataDf)
+
 
   def __getDataAndTemplateFileNames(self, fileNames, templateKeyword="template"):
     '''Classify files (data or template) based on fileName'''
@@ -402,6 +408,27 @@ class MSDataContainer:
     print(f"The correction method for natural abundance has been updated to {newMethod}")
     self.computeNACorrectionDf()
 
+  def updateVolumesOfSampleDilution(self, newVolumeOfDilution, newVolumeOfSampleUsed, useValueDilution=True, useValueSample=True):
+    if useValueDilution:
+      self.volumesOfDilution = [newVolumeOfDilution]*len(self.dataDf)
+    if useValueSample:
+      self.volumesOfSampleSoupUsed = [newVolumeOfSampleUsed]*len(self.dataDf)
+    print(f"The volumes used for normalization have been updated to {newVolumeOfDilution} (dilution) and {newVolumeOfSampleUsed} (sample)")
+
+  def updateVolumeOfDilutionFromTemplateFile(self, columnName, variable="volOfDilution"):
+    templateMap = pd.read_excel(self.templateFileName, sheet_name="MAP")
+    declaredIdx = templateMap.SampleName.dropna().index
+    if variable == "volOfDilution":
+      self.volumesOfDilution = templateMap.loc[declaredIdx, columnName].values
+      print(f"The dilution volumes used for normalization have been updated from template to {self.volumesOfDilution}")
+      assert len(self.volumeOfDilution.dropna())==len(declaredIdx),\
+      f"The number of volume of dilutions declared in the Template file (n={len(self.volumeOfDilution.dropna())}) is different than the number of samples declared (n={len(declaredIdx)})"
+    else:
+      self.volumesOfSampleSoupUsed = templateMap.loc[declaredIdx, columnName].values
+      print(f"The sample volumes used for normalization have been updated from template to {self.volumesOfSampleSoupUsed}")
+      assert len(self.volumesOfSampleSoupUsed.dropna())==len(declaredIdx),\
+      f"The number of sample volumes declared in the Template file (n={len(self.volumesOfSampleSoupUsed.dropna())}) is different than the number of samples declared (n={len(declaredIdx)})"
+
   # Debouncing active for computing the NA correction.
   # Makes for a smoother user experience (no lagging) when ion purity are changed int he textbox
   # Note that this means that the function will be called with the specified delay after parameters are changed
@@ -537,12 +564,10 @@ class MSDataContainer:
 
     # Write each dataframe to a different worksheet.
     if self.experimentType == "Not Labeled":
-      normalization = self.dataDf_norm["SampleWeight"]
+      # normalization = self.dataDf_norm["SampleWeight"]
+      normalization = self.volumesOfSampleSoupUsed*self.dataDf_norm["SampleWeight"]/(self.volumesOfDilution+self.dataDf_norm["SampleWeight"])
     else:
-      # uL of liver soup used = 5uL (the initial liver was diluted in 750)
-      volOfDilution = 750
-      liverSoupVolUsed = 5
-      normalization = liverSoupVolUsed*self.dataDf_norm["SampleWeight"]/(volOfDilution+self.dataDf_norm["SampleWeight"])
+      normalization = self.volumesOfSampleSoupUsed*self.dataDf_norm["SampleWeight"]/(self.volumesOfDilution+self.dataDf_norm["SampleWeight"])
 
     # standards
     standards = self.getConcatenatedStandardResults()
@@ -792,15 +817,47 @@ class MSAnalyzer:
     computeResultsButton = ttk.Button(Actionframe, style="multiLine.TButton", text="Compute\nresults", command=lambda: self.computeResults())
     computeResultsButton.grid(row=2, column=1, pady=5)
 
+    # - - - - - - - - - - - - - - - - - - - - -
+    # The normalization frame
+    Normalizationframe = ttk.LabelFrame(self.window, text="Normalization", relief=tk.RIDGE)
+    Normalizationframe.grid(row=9, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2, pady=6)
+    
+    # variables declaration
+    self.volOfDilutionVar = tk.IntVar()
+    self.volOfSampleUsedVar = tk.IntVar()
+
+    self.volOfDilutionVar.set(self.dataObject.volumesOfDilution[0])
+    self.volOfSampleUsedVar.set(self.dataObject.volumesOfSampleSoupUsed[0])
+
+    # Vol of dilution total
+    self.volOfDilutionVar.trace('w', lambda index,value,op : self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get()))
+    volOfDilutionLabel = tk.Label(Normalizationframe, text="Vol. Dilution", fg="black", bg="#ECECEC")
+    volOfDilutionLabel.grid(row=10, column=1, sticky=tk.W)
+    volOfDilutionSpinbox = tk.Spinbox(Normalizationframe, from_=0, to=1000, width=5, textvariable=self.volOfDilutionVar, command= lambda: self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get()), justify=tk.RIGHT)
+    volOfDilutionSpinbox.grid(row=10, column=2, sticky=tk.W, pady=3)
+
+    checkbuttonVolOfDilution = ttk.Checkbutton(Normalizationframe, text="Use volumes from template")
+    checkbuttonVolOfDilution.grid(row=10, column=3)
+
+    # Vol of sample used
+    self.volOfSampleUsedVar.trace('w', lambda index,value,op : self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get(), True, True))
+    volOfSampleUsedLabel = tk.Label(Normalizationframe, text="Vol. Sample", fg="black", bg="#ECECEC")
+    volOfSampleUsedLabel.grid(row=11, column=1, sticky=tk.W)
+    volOfSampleUsedSpinbox = tk.Spinbox(Normalizationframe, from_=0, to=1000, width=5, textvariable=self.volOfSampleUsedVar, command= lambda: self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get(), True, True), justify=tk.RIGHT)
+    volOfSampleUsedSpinbox.grid(row=11, column=2, sticky=tk.W, pady=3)
+
+    checkbuttonVolOfSampleUsed = ttk.Checkbutton(Normalizationframe, text="Use volumes from template")
+    checkbuttonVolOfSampleUsed.grid(row=11, column=3)
+
     if self.dataObject.experimentType == "Labeled":
       # - - - - - - - - - - - - - - - - - - - - -
       # The Natural Abundance Correction frame 
       Correctionframe = ttk.LabelFrame(self.window, text="Natural Abundance Correction", relief=tk.RIDGE)
-      Correctionframe.grid(row=9, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2, pady=6)
+      Correctionframe.grid(row=12, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2, pady=6)
 
       # Natural Abundance Correction Method
       NACLabel = tk.Label(Correctionframe, text="Method:", fg="black", bg="#ECECEC")
-      NACLabel.grid(row=10, column=1, columnspan=2, sticky=tk.W)
+      NACLabel.grid(row=13, column=1, columnspan=2, sticky=tk.W)
       self.radioCorrectionMethodVariable = tk.StringVar()
       self.radioCorrectionMethodVariable.set("LSC")
       self.radioCorrectionMethodVariable.trace('w', lambda index,value,op : self.__updateNACorrectionMethod(self.radioCorrectionMethodVariable.get()))
@@ -808,29 +865,29 @@ class MSAnalyzer:
                                      variable=self.radioCorrectionMethodVariable, value="LSC")
       methodButton2 = ttk.Radiobutton(Correctionframe, text="Skewed Matrix",
                                      variable=self.radioCorrectionMethodVariable, value="SMC")
-      methodButton1.grid(row=11, column=1, columnspan=2, sticky=tk.W)
-      methodButton2.grid(row=12, column=1 , columnspan=2, sticky=tk.W)
+      methodButton1.grid(row=14, column=1, columnspan=2, sticky=tk.W)
+      methodButton2.grid(row=15, column=1 , columnspan=2, sticky=tk.W)
 
       # isotope tracer
       TracerLabel = tk.Label(Correctionframe, text="Atom tracer:", fg="black", bg="#ECECEC")
-      TracerLabel.grid(row=10, column=3, sticky=tk.E)
+      TracerLabel.grid(row=12, column=3, sticky=tk.E)
       self.TracerListValue = tk.StringVar()
       self.TracerListValue.trace('w', lambda index,value,op : self.__updateTracer(TracerList.get()))
       TracerList = ttk.Combobox(Correctionframe, textvariable=self.TracerListValue, width=3, state="readonly", takefocus=False)
-      TracerList.grid(row=11, column=3, sticky=tk.E)
+      TracerList.grid(row=13, column=3, sticky=tk.E)
       TracerList['values'] = ["C", "H", "O"]
       TracerList.current(0)
 
       # Standards uL
       self.tracerPurity = self.dataObject.tracerPurity
       TracerPurity = CustomText(Correctionframe, height=3, width=12)
-      TracerPurity.grid(row=12, column=3, sticky=tk.E)
+      TracerPurity.grid(row=14, column=3, sticky=tk.E)
       TracerPurity.insert(tk.END, "Purity:\n"+" ".join([f"{pur}" for pur in self.tracerPurity]))
       TracerPurity.bind("<<TextModified>>", self.__updateTracerPurity)
 
       # Compute Results button
       inspectCorrectionButton = ttk.Button(Correctionframe, text="Inspect NA correction", command=lambda: self.inspectCorrectionPlots())
-      inspectCorrectionButton.grid(row=13, column=2, columnspan=2, pady=5)
+      inspectCorrectionButton.grid(row=15, column=2, columnspan=2, pady=5)
   
   def quitApp(self, window):
     # close Matplotlib processes if any
@@ -885,6 +942,9 @@ class MSAnalyzer:
 
   def __updateNACorrectionMethod(self, newMethod):
     self.dataObject.updateNACMethod(newMethod)
+
+  def __updateVolumesForNormalization(self, newVolumeOfDilution, newVolumeOfSampleUsed, useValueDilution, useValueSample):
+    self.dataObject.updateVolumesOfSampleDilution(self, newVolumeOfDilution, newVolumeOfSampleUsed, useValueDilution, useValueSample)
 
   def computeResults(self):
     self.dataObject.saveStandardCurvesAndResults()
