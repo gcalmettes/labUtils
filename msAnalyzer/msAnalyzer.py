@@ -735,7 +735,7 @@ class MSAnalyzer:
     # by default, choose internal reference defined in dataObject (C19:0)
     idxInternalRef = [i for i,name in enumerate(self.FANames) if self.dataObject.internalRef in name][0]
 
-    self.FAMESLabelCurrent = tk.Label(FAMESframe, text=f"The current internal control is {self.FANames[idxInternalRef]}", fg="white", bg="#EBB0FF")
+    self.FAMESLabelCurrent = tk.Label(FAMESframe, text=f"The current internal control is {self.FANames[idxInternalRef]}", fg="white", bg="black")#bg="#EBB0FF")
     self.FAMESLabelCurrent.grid(row=3, column=1, columnspan=3)
 
     self.FAMESListValue = tk.StringVar()
@@ -791,8 +791,6 @@ class MSAnalyzer:
     ttk.Style().configure("multiLine.TButton", justify=tk.CENTER)
     computeResultsButton = ttk.Button(Actionframe, style="multiLine.TButton", text="Compute\nresults", command=lambda: self.computeResults())
     computeResultsButton.grid(row=2, column=1, pady=5)
-
-    
 
     if self.dataObject.experimentType == "Labeled":
       # - - - - - - - - - - - - - - - - - - - - -
@@ -926,7 +924,6 @@ class MSAnalyzer:
     pointsListbox = tk.Listbox(plotFrame, height=8, selectmode='multiple')
     pointsListbox.grid(row=1, column=3, columnspan=2, pady=10, padx=5)
     pointsListbox.bind("<<ListboxSelect>>", updateSelection)
-
 
     canvas = FigureCanvasTkAgg(fig, plotFrame)
 
