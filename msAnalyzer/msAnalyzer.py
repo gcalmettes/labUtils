@@ -585,15 +585,17 @@ class MSDataContainer:
       if col in self.standardDf_nMoles.columns:
         # if nMoles data are present for this exact ion
         xvals = self.standardDf_nMoles[col].values
-      elif self._checkIfParentalIonDataExistsFor(col)[0]:
-        # if there is a matching parental ion, then use the nMoles data from it
-        parentalIon = self._checkIfParentalIonDataExistsFor(col)[1]
-        xvals = self.standardDf_nMoles[parentalIon].values
-        print(f"Standard data for {col} were missing but parental ion {parentalIon} data were used for the fit")
       else:
-        # no match, skip this ion
-        print(f"No standard data were found for {col}, no quantification possible for it.")
-        continue
+        isParentalIon = self._checkIfParentalIonDataExistsFor(col)
+        if isParentalIon[0]:
+          # if there is a matching parental ion, then use the nMoles data from it
+          parentalIon = isParentalIon[1]
+          xvals = self.standardDf_nMoles[parentalIon].values
+          print(f"Standard data for {col} were missing but parental ion {parentalIon} data were used for the fit")
+        else:
+          # no match, skip this ion
+          print(f"No standard data were found for {col}, no quantification possible for it.")
+          continue
 
       yvals = stdAbsorbance[col].values
 
