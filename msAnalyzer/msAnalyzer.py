@@ -272,7 +272,8 @@ class MSDataContainer:
     df = pd.read_excel(self.dataFileName, skiprows=1)
     templateMap = pd.read_excel(self.templateFileName, sheet_name="MAP")
 
-    df_Meta,df_Data = self.__getOrderedDfBasedOnTemplate(df, templateMap)
+    letter = df["Name"][0][0] # F or C
+    df_Meta,df_Data = self.__getOrderedDfBasedOnTemplate(df, templateMap, letter)
         
     if self.experimentType == "Not Labeled":
       regex = self.__regexExpression["NotLabeled"]
@@ -309,11 +310,11 @@ class MSDataContainer:
 
     return pd.concat([df_Meta, df_TemplateInfo, df_Data.fillna(0)], axis=1)
 
-  def __getOrderedDfBasedOnTemplate(self, df, templateMap):
+  def __getOrderedDfBasedOnTemplate(self, df, templateMap, letter="F"):
     '''Get new df_Data and df_Meta based on template'''
 
     # reorder rows based on template and reindex with range
-    newOrder = list(map(lambda x: f"F{x.split('_')[1]}", templateMap.SampleID.values))[:len(df)]
+    newOrder = list(map(lambda x: f"{letter}{x.split('_')[1]}", templateMap.SampleID.values))[:len(df)]
     df.index=df["Name"]
     df = df.reindex(newOrder)
     df.index = list(range(len(df)))
@@ -376,7 +377,8 @@ class MSDataContainer:
 
   def getStandardAbsorbance(self):
     '''Get normalized absorbance data for standards'''
-    return self.dataDf_norm.loc[self.dataDf_norm.SampleName.str.match('S[0-9]+')]
+    matchedLocations = self.dataDf_norm.SampleName.str.match('S[0-9]+', na=False)
+    return self.dataDf_norm.loc[matchedLocations]
 
   def updateTracer(self, newTracer):
     self.tracer = newTracer
@@ -568,7 +570,7 @@ class MSDataContainer:
         # fit of data
         xvals = self.standardDf_nMoles[carbon].values
         yvals = stdAbsorbance[col].values
-        
+
         if not useMask:
           mask1 = [~np.logical_or(np.isnan(x), np.isnan(y)) for x,y in zip(xvals, yvals)]
           mask2 = [~np.logical_or(np.isnan(x), y==0) for x,y in zip(xvals, yvals)]
@@ -581,7 +583,12 @@ class MSDataContainer:
           except:
             mask = self._maskFAMES[col]["originalMask"]
 
-        fitDf[col] = np.polyfit(np.array(xvals[mask], dtype=float), np.array(yvals[mask], dtype=float), 1)
+        xvalsToFit =  np.array(xvals[mask], dtype=float)
+        yvalsToFit = np.array(yvals[mask], dtype=float)
+        if ((len(xvalsToFit)<3)|len(yvalsToFit)<3):
+          print(f"Standard fit of {carbon} skipped (not enough values)")
+          continue
+        fitDf[col] = np.polyfit(xvalsToFit, yvalsToFit, 1)
     
     # save fits
     self.standardDf_fitResults = fitDf
@@ -1127,11 +1134,15 @@ if __name__ == '__main__':
 
   dvt = False
   if (dvt):
-    filenames = ["data/ex-data-labeled.xlsx", "data/template_labeled.xlsx"]
+    # filenames = ["data/ex-data-labeled.xlsx", "data/template_labeled.xlsx"]
+    filenames = ["data2/171125DHAmilk2.xlsx", "data2/template.xlsx"]
     appData = MSDataContainer(filenames)
-    appData.updateStandards(40, 500, [1, 5, 10, 20, 40, 80])
-    appData.computeNACorrectionDf()
-    appData.updateInternalRef(appData.internalRef)
+    #appData.updateStandards(40, 500, [1, 5, 10, 20, 40, 80])
+    #appData.computeNACorrectionDf()
+
+    newInternalRef = [name for name in appData.internalRefList if appData.internalRef in name][0]
+    appData.updateInternalRef(newInternalRef)
+    appData.updateStandards(100, 500, [1, 5, 10, 20, 40, 80])
 
   else:
 
