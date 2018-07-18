@@ -527,20 +527,19 @@ class MSDataContainer:
       liverSoupVolUsed = 5
       normalization = liverSoupVolUsed*self.dataDf_norm["SampleWeight"]/(volOfDilution+self.dataDf_norm["SampleWeight"])
 
-    self.dataDf_quantification.to_excel(writer, sheet_name='Abs_total', index=False)
+    self.dataDf_quantification.to_excel(writer, sheet_name='QuantTotal_nMoles', index=False)
     resNorm = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], quantificationDf.divide(normalization, axis=0)], axis=1)
-    resNorm.to_excel(writer, sheet_name='Abs_total_norm', index=False)
+    resNorm.to_excel(writer, sheet_name='QuantTotal_nMoles_mg', index=False)
     if self.experimentType == "Labeled":
       newlySynthetizedMoles = quantificationDf*self.dataDf_labeledProportions[quantificationDf.columns]
       res_newlySynthetizedMoles = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], newlySynthetizedMoles], axis=1)
       # uL of liver soup used = 5uL (the initial liver was diluted in 750)
-      volOfDilution = 750
-      liverSoupVolUsed = 5
       res_newlySynthetizedMoles_norm = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], newlySynthetizedMoles.divide(normalization, axis=0)], axis=1)
-      res_newlySynthetizedMoles.to_excel(writer, sheet_name='Abs_synthetized', index=False)
-      res_newlySynthetizedMoles_norm.to_excel(writer, sheet_name='Abs_synthetized_norm', index=False)
-    self.dataDf.to_excel(writer, sheet_name='Initial Data', index=False)
-    self.dataDf_norm.to_excel(writer, sheet_name='Normalized Data', index=False)
+      res_newlySynthetizedMoles.to_excel(writer, sheet_name='QuantSynthetized_nMoles', index=False)
+      res_newlySynthetizedMoles_norm.to_excel(writer, sheet_name='QuantSynthetized_nMoles_mg', index=False)
+      self.dataDf_labeledProportions[["SampleID", "SampleName", "Comments", *self.dataDf_labeledProportions.columns[7:]]].to_excel(writer, sheet_name='PercentageSynthetized', index=False)
+    self.dataDf.to_excel(writer, sheet_name='OriginalData', index=False)
+    self.dataDf_norm.to_excel(writer, sheet_name='OriginalData_normToInternalRef', index=False)
   
     # Close the Pandas Excel writer and output the Excel file.
     writer.save()
@@ -1113,7 +1112,7 @@ class MSAnalyzer:
 
         ax.set_title(f"{name} - {self.dataObject.dataDf.iloc[i, 2]} {self.dataObject.dataDf.iloc[i, 3]}")
         ax.set_ylabel("Absorbance")
-        
+
         fig.tight_layout()
 
         fig.savefig(f"{directory}/{self.dataObject.dataDf.iloc[i, 2]}")
@@ -1128,7 +1127,7 @@ if __name__ == '__main__':
 
   dvt = False
   if (dvt):
-    filenames = ["data/180530ETV22_37Liv_FAMES-labeled.xlsx", "data/template_labeled.xlsx"]
+    filenames = ["data/ex-data-labeled.xlsx", "data/template_labeled.xlsx"]
     appData = MSDataContainer(filenames)
     appData.updateStandards(40, 500, [1, 5, 10, 20, 40, 80])
     appData.computeNACorrectionDf()
