@@ -481,7 +481,12 @@ class MSDataContainer:
       slope,intercept = self.standardDf_fitResults.loc[["slope", "intercept"], col]
       
       # standards values and fits
-      xvals = self.standardDf_nMoles[col].values
+      try:
+        xvals = self.standardDf_nMoles[col].values
+      except:
+        # if error, it means that parental ion data were used
+        parentalIon = self._checkIfParentalIonDataExistsFor(col)[1]
+        xvals = self.standardDf_nMoles[parentalIon].values
       yvals = stdAbsorbance[col].values
       try:
         mask = self._maskFAMES[col]["newMask"]
@@ -578,35 +583,61 @@ class MSDataContainer:
 
     for i,col in enumerate(stdAbsorbance.columns):
       if col in self.standardDf_nMoles.columns:
-        # fit of data
+        # if nMoles data are present for this exact ion
         xvals = self.standardDf_nMoles[col].values
-        yvals = stdAbsorbance[col].values
-
-        if not useMask:
-          mask1 = [~np.logical_or(np.isnan(x), np.isnan(y)) for x,y in zip(xvals, yvals)]
-          mask2 = [~np.logical_or(np.isnan(x), y==0) for x,y in zip(xvals, yvals)]
-          mask = [(m1 & m2) for m1,m2 in zip(mask1, mask2)]
-          # add carbon to valid standard FAMES and save mask
-          self._maskFAMES[col] = {"originalMask": mask}
-        else:
-          try:
-            mask = self._maskFAMES[col]["newMask"]
-          except:
-            mask = self._maskFAMES[col]["originalMask"]
-
-        xvalsToFit =  np.array(xvals[mask], dtype=float)
-        yvalsToFit = np.array(yvals[mask], dtype=float)
-        if ((len(xvalsToFit)<3)|len(yvalsToFit)<3):
-          print(f"Standard fit of {col} skipped (not enough values)")
-          continue
-        fitDf[col] = np.polyfit(xvalsToFit, yvalsToFit, 1)
+      elif self._checkIfParentalIonDataExistsFor(col)[0]:
+        # if there is a matching parental ion, then use the nMoles data from it
+        parentalIon = self._checkIfParentalIonDataExistsFor(col)[1]
+        xvals = self.standardDf_nMoles[parentalIon].values
+        print(f"Standard data for {col} were missing but parental ion {parentalIon} data were used for the fit")
       else:
+        # no match, skip this ion
         print(f"No standard data were found for {col}, no quantification possible for it.")
+        continue
+
+      yvals = stdAbsorbance[col].values
+
+      if not useMask:
+        mask1 = [~np.logical_or(np.isnan(x), np.isnan(y)) for x,y in zip(xvals, yvals)]
+        mask2 = [~np.logical_or(np.isnan(x), y==0) for x,y in zip(xvals, yvals)]
+        mask = [(m1 & m2) for m1,m2 in zip(mask1, mask2)]
+        # add carbon to valid standard FAMES and save mask
+        self._maskFAMES[col] = {"originalMask": mask}
+      else:
+        try:
+          mask = self._maskFAMES[col]["newMask"]
+        except:
+          mask = self._maskFAMES[col]["originalMask"]
+
+      xvalsToFit =  np.array(xvals[mask], dtype=float)
+      yvalsToFit = np.array(yvals[mask], dtype=float)
+      if ((len(xvalsToFit)<3)|len(yvalsToFit)<3):
+        print(f"Standard fit of {col} skipped (not enough values)")
+        continue
+      fitDf[col] = np.polyfit(xvalsToFit, yvalsToFit, 1)
     
     # save fits
     self.standardDf_fitResults = fitDf
 
     return fitDf
+
+  def _checkIfParentalIonDataExistsFor(self, ion):
+    try:
+      # extract carbon and mass of ion
+      carbon,mass = re.match("(C[0-9]+:[0-9]+) \(([0-9]+)\)", ion).groups()
+      mass = int(mass)
+      # check if a similar carbon is present in standard data we have
+      boolIdx = self.standardDf_nMoles.columns.str.match(f"{carbon}")
+      matchingCarbons = self.standardDf_nMoles.columns[boolIdx]
+      if len(matchingCarbons)>0:
+        # get mass all matching carbons and only consider the heaviest one
+        massOfMatchingCarbons = [[i,int(mass)] for i,ion in enumerate(matchingCarbons) for mass in re.match(f"{carbon} \(([0-9]+)\)", ion).groups()]
+        idxHeaviest,massHeaviest = sorted(massOfMatchingCarbons, key = lambda entry: entry[1])[-1]
+        return [True, matchingCarbons[idxHeaviest]]
+      else:
+        return [False]
+    except:
+      return [False]
 
   def computeQuantificationFromStandardFits(self, useMask=False):
     '''Use fits (slope/intercept) of standards to quantify FAMES from absorbance'''
