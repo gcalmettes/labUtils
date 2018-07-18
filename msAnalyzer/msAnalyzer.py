@@ -735,7 +735,7 @@ class MSAnalyzer:
     # by default, choose internal reference defined in dataObject (C19:0)
     idxInternalRef = [i for i,name in enumerate(self.FANames) if self.dataObject.internalRef in name][0]
 
-    self.FAMESLabelCurrent = tk.Label(FAMESframe, text=f"The current internal control is {self.FANames[idxInternalRef]}", fg="white", bg="black")#bg="#EBB0FF")
+    self.FAMESLabelCurrent = tk.Label(FAMESframe, text=f"The current internal control is {self.FANames[idxInternalRef]}", fg="white", bg="#EBB0FF")
     self.FAMESLabelCurrent.grid(row=3, column=1, columnspan=3)
 
     self.FAMESListValue = tk.StringVar()
