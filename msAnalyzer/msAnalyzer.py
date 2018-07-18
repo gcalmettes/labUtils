@@ -243,7 +243,6 @@ class MSDataContainer:
     self.__standardDf_template = self.__getStandardsTemplateDf()
     self.volumeMixTotal = 500
     self.volumeMixForPrep = 100
-    # self.volumeSample = 100
     self.volumeStandards = [1, 5, 10, 20, 40, 80]
 
     self.standardDf_nMoles = self.computeStandardMoles()
@@ -275,7 +274,7 @@ class MSDataContainer:
 
     letter = df["Name"][0][0] # F or C
     df_Meta,df_Data = self.__getOrderedDfBasedOnTemplate(df, templateMap, letter)
-        
+
     if self.experimentType == "Not Labeled":
       regex = self.__regexExpression["NotLabeled"]
       self.dataColNames = [f"C{carbon[:2]}:{carbon[2:]} ({mass})" for name in self.dataColNames for num,carbon,mass in re.findall(regex, name)]
@@ -311,14 +310,14 @@ class MSDataContainer:
 
     # save number of columns before actual data
     self._dataStartIdx = len(df_Meta.columns)+len(df_TemplateInfo.columns)
-
+    
     return pd.concat([df_Meta, df_TemplateInfo, df_Data.fillna(0)], axis=1)
 
   def __getOrderedDfBasedOnTemplate(self, df, templateMap, letter="F", skipCols=7):
     '''Get new df_Data and df_Meta based on template'''
 
     # reorder rows based on template and reindex with range
-    newOrder = list(map(lambda x: f"{letter}{x.split('_')[1]}", templateMap.SampleID.values))[:len(df)]
+    newOrder = list(map(lambda x: f"{letter}{x.split('_')[1]}", templateMap.SampleID[templateMap.SampleName.dropna().index].values))[:len(df)]
     df.index=df["Name"]
     df = df.reindex(newOrder)
     df.index = list(range(len(df)))
@@ -332,6 +331,7 @@ class MSDataContainer:
     # keep only rows with declared names
     declaredIdx = templateMap.SampleName.dropna().index
     templateMap = templateMap.loc[declaredIdx]
+    templateMap.index = range(len(templateMap)) # in case there were missing values
     # fill in missing weights with 1
     templateMap.loc[templateMap.SampleWeight.isna(), "SampleWeight"]=1
     return templateMap[["SampleID", "SampleName", "SampleWeight", "Comments"]]
@@ -1170,12 +1170,13 @@ if __name__ == '__main__':
     if sys.argv[2] != "Labeled":
       print("Dvt: Not Labeled expt")
       # not labeled ex
-      filenames = ["data/ex-data-not-labeled.xlsx", "data/template_not_labeled.xlsx"]
+      # filenames = ["data/ex-data-not-labeled.xlsx", "data/template_not_labeled.xlsx"]
       # filenames = ["data2/171125DHAmilk2.xlsx", "data2/template.xlsx"]
+      filenames = ["data3/lung.xlsx", "data3/template-lung.xlsx"]
       appData = MSDataContainer(filenames)
       newInternalRef = [name for name in appData.internalRefList if appData.internalRef in name][0]
       appData.updateInternalRef(newInternalRef)
-      appData.updateStandards(100, 500, [1, 5, 10, 20, 40, 80])
+      appData.updateStandards(244, 250, [1, 5, 10])
       appData.computeStandardFits()
     else:
       print("Dvt: Labeled expt")
