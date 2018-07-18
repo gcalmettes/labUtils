@@ -234,6 +234,7 @@ class MSDataContainer:
     self.tracerPurity = tracerPurity
     self.NACMethod = "LSC" # least squares skewed matrix correction
     self.dataFileName, self.templateFileName = self.__getDataAndTemplateFileNames(fileNames)
+    self._baseFileName = os.path.basename(self.dataFileName).split('.')[0]
     self.pathDirName = os.path.dirname(self.dataFileName)
     self.__regexExpression = {"NotLabeled": "([0-9]+)_([0-9]+)_([0-9]+)",
                               "Labeled": "([0-9]+)_([0-9]+).[0-9]+"}
@@ -308,9 +309,12 @@ class MSDataContainer:
     assert len(df_TemplateInfo)==len(df_Data), \
     f"The number of declared samples in the template (n={len(df_TemplateInfo)}) does not match the number of samples detected in the data file (n={len(df_Data)})"
 
+    # save number of columns before actual data
+    self._dataStartIdx = len(df_Meta.columns)+len(df_TemplateInfo.columns)
+
     return pd.concat([df_Meta, df_TemplateInfo, df_Data.fillna(0)], axis=1)
 
-  def __getOrderedDfBasedOnTemplate(self, df, templateMap, letter="F"):
+  def __getOrderedDfBasedOnTemplate(self, df, templateMap, letter="F", skipCols=7):
     '''Get new df_Data and df_Meta based on template'''
 
     # reorder rows based on template and reindex with range
@@ -320,7 +324,7 @@ class MSDataContainer:
     df.index = list(range(len(df)))
 
     df_Meta = df[["Name", "Data File"]]
-    df_Data = df.iloc[:, 7:] # 7 first cols are info
+    df_Data = df.iloc[:, skipCols:] # 7 first cols are info
     return df_Meta, df_Data
 
   def __getExperimentMetaInfoFromMAP(self, templateMap):
@@ -330,7 +334,7 @@ class MSDataContainer:
     templateMap = templateMap.loc[declaredIdx]
     # fill in missing weights with 1
     templateMap.loc[templateMap.SampleWeight.isna(), "SampleWeight"]=1
-    return templateMap[["SampleID", "SampleName", "SampleWeight", "LabeledCode", "Comments"]]
+    return templateMap[["SampleID", "SampleName", "SampleWeight", "Comments"]]
 
   def __getStandardsTemplateDf(self, sheetKeyword="STANDARD"):
     sheetName = f"{sheetKeyword}_{'_'.join(self.experimentType.upper().split(' '))}"
@@ -338,7 +342,7 @@ class MSDataContainer:
     return templateStandard
 
   def __makeResultFolder(self):
-    directory = f"{self.pathDirName}/results"
+    directory = f"{self.pathDirName}/results-{self._baseFileName}"
     if not os.path.exists(directory):
       os.mkdir(directory)
     return directory
@@ -371,7 +375,10 @@ class MSDataContainer:
       template[f"Std-nMol-{ul}"] = 1000*template[f"Std-Conc-{ul}"]/template["MW"]
     # create a clean template with only masses and carbon name
     templateClean = pd.concat([template.Chain, template.filter(regex="Std-nMol")], axis=1).transpose()
-    templateClean.columns = list(map(lambda x: "C"+x, templateClean.iloc[0]))
+    if self.experimentType == "Not Labeled":
+      templateClean.columns = [f"C{chain} ({int(mass)})" for chain,mass in zip(self.__standardDf_template.Chain, self.__standardDf_template.MW)]
+    else:
+      templateClean.columns = list(map(lambda chain: f"C{chain}", templateClean.iloc[0]))
     templateClean = templateClean.iloc[1:]
     return templateClean
 
@@ -403,16 +410,16 @@ class MSDataContainer:
     '''Normalize the data to the internal ref'''
     if self.experimentType == "Not Labeled":
       dataDf_norm = self.dataDf.copy()
-      dataDf_norm.iloc[:, 7:] = dataDf_norm.iloc[:, 7:].divide(dataDf_norm[self.internalRef], axis=0)
+      dataDf_norm.iloc[:, self._dataStartIdx:] = dataDf_norm.iloc[:, self._dataStartIdx:].divide(dataDf_norm[self.internalRef], axis=0)
     else:
       sumFracDf = self.calculateSumIonsForAll()
       sumFracDf = sumFracDf.divide(sumFracDf[self.internalRef], axis=0)
       # sumFracDf = pd.DataFrame(columns=sumFracDf.columns, data=sumFracDf.values/sumFracDf[self.internalRef].values[:, np.newaxis])
-      dataDf_norm = pd.concat([self.dataDf.iloc[:,:7], sumFracDf], axis=1)
+      dataDf_norm = pd.concat([self.dataDf.iloc[:, :self._dataStartIdx], sumFracDf], axis=1)
     return dataDf_norm
 
   def correctForNaturalAbundance(self):
-    correctedData = self.dataDf.iloc[:,:7]
+    correctedData = self.dataDf.iloc[:, :self._dataStartIdx]
     for parentalIon in self.internalRefList:
       ionMID = self.dataDf.filter(regex=parentalIon)
       if ionMID.shape[1]<=1:
@@ -442,12 +449,12 @@ class MSDataContainer:
     '''Return df of the labeling proportions for all the ions'''
     proportions = pd.concat([self.calculateLabeledProportion(self.dataDf_corrected.filter(regex=parentalIon)) for parentalIon in self.internalRefList], axis=1)
     proportions.columns = self.internalRefList
-    return pd.concat([self.dataDf.iloc[:,:7], proportions], axis=1)
+    return pd.concat([self.dataDf.iloc[:, :self._dataStartIdx], proportions], axis=1)
 
   def saveStandardCurvesAndResults(self, useMask=False):
-
+    '''Save figures and all the relevant data in files'''
     self.dataDf_quantification = self.computeQuantificationFromStandardFits(useMask=useMask)
-    stdAbsorbance = self.getStandardAbsorbance().iloc[:,7:]
+    stdAbsorbance = self.getStandardAbsorbance().iloc[:, self._dataStartIdx:]
     quantificationDf = self.dataDf_quantification.iloc[:, 3:]
 
     nTotal = len(quantificationDf.columns)
@@ -459,8 +466,10 @@ class MSDataContainer:
       nRows = int(np.floor(nTotal/nCols)+1)
 
     # fig1 (only standards) and fig2 (standards + calculated FAMES concentration)
-    fig1,axes1 = plt.subplots(ncols=nCols, nrows=nRows, figsize=(20, nRows*4))
-    fig2,axes2 = plt.subplots(ncols=nCols, nrows=nRows, figsize=(20, nRows*4))
+    fig1,axes1 = plt.subplots(ncols=nCols, nrows=nRows, figsize=(20, nRows*4), constrained_layout=True)
+    fig2,axes2 = plt.subplots(ncols=nCols, nrows=nRows, figsize=(20, nRows*4), constrained_layout=True)
+    suptitle1 = fig1.suptitle(f"Experiment: {self._baseFileName}")
+    suptitle2 = fig2.suptitle(f"Experiment: {self._baseFileName}")
 
     if not useMask:
       extension = ""
@@ -468,12 +477,11 @@ class MSDataContainer:
       extension = "_modified"
 
     for i,(col,ax1,ax2) in enumerate(zip(quantificationDf.columns,  axes1.ravel(), axes2.ravel())):
-      carbon = re.findall(r"(C\d+:\d+)", col)[0]
-      # get slope/intercept from the FAMES standard
+      # if slope/intercept from standard are present for this ion, then continue
       slope,intercept = self.standardDf_fitResults.loc[["slope", "intercept"], col]
       
       # standards values and fits
-      xvals = self.standardDf_nMoles[carbon].values
+      xvals = self.standardDf_nMoles[col].values
       yvals = stdAbsorbance[col].values
       try:
         mask = self._maskFAMES[col]["newMask"]
@@ -502,9 +510,6 @@ class MSDataContainer:
       ax2.set_xlabel("Quantity (nMoles)")
       ax2.set_ylabel("Absorbance")
     
-    fig1.tight_layout()
-    fig2.tight_layout()
-    
     #####################
     # Save data and figures
 
@@ -512,13 +517,13 @@ class MSDataContainer:
     savePath = self.__makeResultFolder()
 
     # save figures
-    fig1.savefig(f"{savePath}/standard-fit{extension}.pdf")
-    fig2.savefig(f"{savePath}/standard-fit-with-data{extension}.pdf")
+    fig1.savefig(f"{savePath}/standard-fit{extension}.pdf", bbox_extra_artists=(suptitle1,), bbox_inches="tight")
+    fig2.savefig(f"{savePath}/standard-fit-with-data{extension}.pdf", bbox_extra_artists=(suptitle2,), bbox_inches="tight")
     # close Matplotlib processes
     plt.close('all')
 
     # Create a Pandas Excel writer using XlsxWriter as the engine.
-    writer = pd.ExcelWriter(f"{savePath}/results{extension}.xlsx", engine='xlsxwriter')
+    writer = pd.ExcelWriter(f"{savePath}/results-{self._baseFileName}{extension}.xlsx", engine='xlsxwriter')
 
     # Write each dataframe to a different worksheet.
     if self.experimentType == "Not Labeled":
@@ -529,17 +534,24 @@ class MSDataContainer:
       liverSoupVolUsed = 5
       normalization = liverSoupVolUsed*self.dataDf_norm["SampleWeight"]/(volOfDilution+self.dataDf_norm["SampleWeight"])
 
-    self.dataDf_quantification.to_excel(writer, sheet_name='QuantTotal_nMoles', index=False)
+    # standards
+    standards = self.getConcatenatedStandardResults()
+    standards.to_excel(writer, sheet_name='Standards', index=True)
+    # data
+    notStandardOrNegRegex = '^(?!neg|S[0-9]+$)' # not 'neg' nor any 'S1, S2, etc ...'
+    expDataLoc = self.dataDf_quantification.SampleName.str.match(notStandardOrNegRegex, na=False)
+    self.dataDf_quantification.loc[expDataLoc].to_excel(writer, sheet_name='QuantTotal_nMoles', index=False)
     resNorm = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], quantificationDf.divide(normalization, axis=0)], axis=1)
-    resNorm.to_excel(writer, sheet_name='QuantTotal_nMoles_mg', index=False)
+    resNorm.loc[expDataLoc].to_excel(writer, sheet_name='QuantTotal_nMoles_mg', index=False)
     if self.experimentType == "Labeled":
       newlySynthetizedMoles = quantificationDf*self.dataDf_labeledProportions[quantificationDf.columns]
       res_newlySynthetizedMoles = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], newlySynthetizedMoles], axis=1)
       # uL of liver soup used = 5uL (the initial liver was diluted in 750)
       res_newlySynthetizedMoles_norm = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], newlySynthetizedMoles.divide(normalization, axis=0)], axis=1)
-      res_newlySynthetizedMoles.to_excel(writer, sheet_name='QuantSynthetized_nMoles', index=False)
-      res_newlySynthetizedMoles_norm.to_excel(writer, sheet_name='QuantSynthetized_nMoles_mg', index=False)
-      self.dataDf_labeledProportions[["SampleID", "SampleName", "Comments", *self.dataDf_labeledProportions.columns[7:]]].to_excel(writer, sheet_name='PercentageSynthetized', index=False)
+      res_newlySynthetizedMoles.loc[expDataLoc].to_excel(writer, sheet_name='QuantSynthetized_nMoles', index=False)
+      res_newlySynthetizedMoles_norm.loc[expDataLoc].to_excel(writer, sheet_name='QuantSynthetized_nMoles_mg', index=False)
+      labeledProp = self.dataDf_labeledProportions[["SampleID", "SampleName", "Comments", *self.dataDf_labeledProportions.columns[self._dataStartIdx:]]]
+      labeledProp.loc[expDataLoc].to_excel(writer, sheet_name='PercentageSynthetized', index=False)
     self.dataDf.to_excel(writer, sheet_name='OriginalData', index=False)
     self.dataDf_norm.to_excel(writer, sheet_name='OriginalData_normToInternalRef', index=False)
   
@@ -557,7 +569,7 @@ class MSDataContainer:
     fitDf = pd.DataFrame(index=["slope", "intercept"])
 
     # Plot of Standard
-    stdAbsorbance = self.getStandardAbsorbance().iloc[:,7:]
+    stdAbsorbance = self.getStandardAbsorbance().iloc[:, self._dataStartIdx:]
     assert len(stdAbsorbance) == len(self.standardDf_nMoles),\
     f"The number of standards declared in the STANDARD_{'_'.join(self.experimentType.upper().split(' '))} sheet (n={len(self.standardDf_nMoles)}) is different than the number of standards declared in the data file (n={len(stdAbsorbance)})"
 
@@ -565,10 +577,9 @@ class MSDataContainer:
       self._maskFAMES = {}
 
     for i,col in enumerate(stdAbsorbance.columns):
-      carbon = re.findall(r"(C\d+:\d+)", col)[0]
-      if carbon in self.standardDf_nMoles.columns:
+      if col in self.standardDf_nMoles.columns:
         # fit of data
-        xvals = self.standardDf_nMoles[carbon].values
+        xvals = self.standardDf_nMoles[col].values
         yvals = stdAbsorbance[col].values
 
         if not useMask:
@@ -586,9 +597,11 @@ class MSDataContainer:
         xvalsToFit =  np.array(xvals[mask], dtype=float)
         yvalsToFit = np.array(yvals[mask], dtype=float)
         if ((len(xvalsToFit)<3)|len(yvalsToFit)<3):
-          print(f"Standard fit of {carbon} skipped (not enough values)")
+          print(f"Standard fit of {col} skipped (not enough values)")
           continue
         fitDf[col] = np.polyfit(xvalsToFit, yvalsToFit, 1)
+      else:
+        print(f"No standard data were found for {col}, no quantification possible for it.")
     
     # save fits
     self.standardDf_fitResults = fitDf
@@ -607,6 +620,8 @@ class MSDataContainer:
 
     return pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], resultsDf], axis=1)
 
+  def getConcatenatedStandardResults(self):
+    return pd.concat([self.standardDf_fitResults, self.standardDf_nMoles], axis=0, sort=True)
 
 
 #############################################################################
@@ -698,12 +713,10 @@ class MSAnalyzer:
     # variables declaration
     self.volTotalVar = tk.IntVar()
     self.volMixVar = tk.IntVar()
-    # self.volSampleVar = tk.IntVar()
     self.stdVols = self.dataObject.volumeStandards
 
     self.volTotalVar.set(self.dataObject.volumeMixTotal)
     self.volMixVar.set(self.dataObject.volumeMixForPrep)
-    # self.volSampleVar.set(self.dataObject.volumeSample)
 
     # Vol mix total
     self.volTotalVar.trace('w', lambda index,value,op : self.__updateVolumeMixTotal(self.volTotalVar.get()))
@@ -718,13 +731,6 @@ class MSAnalyzer:
     volMixSpinbox.grid(row=6, column=2, sticky=tk.W, pady=3)
     volMixLabel = tk.Label(Standardframe, text="Vol. Mix", fg="black", bg="#ECECEC")
     volMixLabel.grid(row=6, column=1, sticky=tk.W)
-
-    # # Vol sample
-    # self.volSampleVar.trace('w', lambda index,value,op : self.__updateVolumeSample(self.volSampleVar.get()))
-    # volSampleSpinbox = tk.Spinbox(Standardframe, from_=0, to=1000, width=5, textvariable=self.volSampleVar, command= lambda: self.__updateVolumeSample(self.volSampleVar.get()), justify=tk.RIGHT)
-    # volSampleSpinbox.grid(row=7, column=2, sticky=tk.W, pady=3)
-    # volSampleLabel = tk.Label(Standardframe, text="Vol. Sample", fg="black", bg="#ECECEC")
-    # volSampleLabel.grid(row=7, column=1, sticky=tk.W)
 
     # Standards uL
     StandardVols = CustomText(Standardframe, height=7, width=15)
@@ -824,10 +830,6 @@ class MSAnalyzer:
     self.dataObject.updateStandards(newVolumeMixForPrep, self.volTotalVar.get(), self.stdVols)
     print(f"The volumeMixForPrep has been updated to {newVolumeMixForPrep}")
 
-  # def __updateVolumeSample(self, newVolumeSample):
-  #   self.dataObject.volumeSample = newVolumeSample
-  #   print(f"The volumeSample has been updated to {newVolumeSample}")
-
   def __updateVolumeStandards(self, event):
     newStdVols = [float(vol) for vol in re.findall(r"(?<!\d)\d+\.?\d*(?!\d)", event.widget.get("1.0", "end-1c"))]
     self.stdVols = newStdVols
@@ -873,7 +875,7 @@ class MSAnalyzer:
     # will go over all the selectedFAMES
     currentFAMESidx = 0
 
-    fig,ax = plt.subplots(figsize=(4,3))
+    fig,ax = plt.subplots(figsize=(4,3), constrained_layout=True)
 
     plotFrame = tk.Tk()
     plotFrame.wm_title("Standard curve inspector")
@@ -889,9 +891,6 @@ class MSAnalyzer:
     canvas = FigureCanvasTkAgg(fig, plotFrame)
 
     self.plotIsolatedFAMES(FAMESselected[currentFAMESidx], ax, canvas, pointsListbox, 1)
-
-    # make everything fit
-    fig.tight_layout()
 
     figFrame = canvas.get_tk_widget()#.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
     figFrame.grid(row=1, column=1, columnspan=2, rowspan=3, pady=10, padx=10)
@@ -935,8 +934,7 @@ class MSAnalyzer:
   def plotIsolatedFAMES(self, famesName, ax, canvas, pointsListbox, direction=1):
     ax.clear()
 
-    carbon = re.findall(r"(C\d+:\d+)", famesName)[0]
-    xvals = self.dataObject.standardDf_nMoles[carbon].values
+    xvals = self.dataObject.standardDf_nMoles[famesName].values
     yvals = self.dataObject.getStandardAbsorbance()[famesName].values
 
     if direction == 1:
@@ -951,7 +949,7 @@ class MSAnalyzer:
           y = f"{y:.3f}"
         pointsListbox.insert(tk.END, f" point{i}: ({x:.3f}, {y})")
 
-    maskSelected = [not (i in pointsListbox.curselection()) for i in range(len(self.dataObject.standardDf_nMoles[carbon].values))]
+    maskSelected = [not (i in pointsListbox.curselection()) for i in range(len(self.dataObject.standardDf_nMoles[famesName].values))]
     newMask = [(m1 & m2) for m1,m2 in zip(self.dataObject._maskFAMES[famesName]["originalMask"], maskSelected)]
     self.dataObject._maskFAMES[famesName]["newMask"] = newMask
 
@@ -1029,10 +1027,9 @@ class MSAnalyzer:
     correctionTreeView.grid(row=2, column=8, columnspan=3, pady=2, padx=10)
 
     # Main fig
-    fig,ax = plt.subplots(figsize=(6,3))
+    fig,ax = plt.subplots(figsize=(6,3), constrained_layout=True)
     canvas = FigureCanvasTkAgg(fig, plotFrame)
     self.plotIsolatedCorrection(self.FANames[currentCorrectionIdx], SampleList.get(), ax, canvas, correctionTreeView)
-    fig.tight_layout()
     figFrame = canvas.get_tk_widget()#.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
     figFrame.grid(row=2, column=1, columnspan=7, rowspan=3, pady=10, padx=10)
 
@@ -1098,7 +1095,7 @@ class MSAnalyzer:
       if not os.path.exists(directory):
         os.mkdir(directory)
 
-      fig,ax = plt.subplots(figsize=(6,3))
+      fig,ax = plt.subplots(figsize=(6,3), constrained_layout=True)
 
       for i in range(len(originalData)):
         orData = originalData.iloc[i]
@@ -1120,8 +1117,6 @@ class MSAnalyzer:
         ax.set_title(f"{name} - {self.dataObject.dataDf.iloc[i, 2]} {self.dataObject.dataDf.iloc[i, 3]}")
         ax.set_ylabel("Absorbance")
 
-        fig.tight_layout()
-
         fig.savefig(f"{directory}/{self.dataObject.dataDf.iloc[i, 2]}")
       plt.close("all")
 
@@ -1132,20 +1127,32 @@ class MSAnalyzer:
 
 if __name__ == '__main__':
 
-  dvt = False
-  if (dvt):
-    # filenames = ["data/ex-data-labeled.xlsx", "data/template_labeled.xlsx"]
-    filenames = ["data2/171125DHAmilk2.xlsx", "data2/template.xlsx"]
-    appData = MSDataContainer(filenames)
-    #appData.updateStandards(40, 500, [1, 5, 10, 20, 40, 80])
-    #appData.computeNACorrectionDf()
+  ######################
+  ## Please ignore, this is just a facility hack to call the dvt mode and testing via ipython without the GUI 
+  if len(sys.argv) == 3: #dvt mode
+    if sys.argv[2] != "Labeled":
+      print("Dvt: Not Labeled expt")
+      # not labeled ex
+      filenames = ["data/ex-data-not-labeled.xlsx", "data/template_not_labeled.xlsx"]
+      # filenames = ["data2/171125DHAmilk2.xlsx", "data2/template.xlsx"]
+      appData = MSDataContainer(filenames)
+      newInternalRef = [name for name in appData.internalRefList if appData.internalRef in name][0]
+      appData.updateInternalRef(newInternalRef)
+      appData.updateStandards(100, 500, [1, 5, 10, 20, 40, 80])
+      appData.computeStandardFits()
+    else:
+      print("Dvt: Labeled expt")
+      # labeled
+      filenames = ["data/ex-data-labeled.xlsx", "data/template_labeled.xlsx"]
+      appData = MSDataContainer(filenames)
+      appData.updateStandards(40, 500, [1, 5, 10, 20, 40, 80])
+      appData.computeNACorrectionDf()
+      appData.dataDf_norm = appData.computeNormalizedData()
+      appData.computeStandardFits()
 
-    newInternalRef = [name for name in appData.internalRefList if appData.internalRef in name][0]
-    appData.updateInternalRef(newInternalRef)
-    appData.updateStandards(100, 500, [1, 5, 10, 20, 40, 80])
-
+  ##########################################
+  ## This is what __main__ should look like
   else:
-
     # Is the directory to look in for data files defined?
     if len(sys.argv) == 1: # no arguments given to the function
       initialDirectory = False
