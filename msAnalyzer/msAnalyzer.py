@@ -337,6 +337,7 @@ class MSDataContainer:
     return templateMap[["SampleID", "SampleName", "SampleWeight", "Comments"]]
 
   def __getStandardsTemplateDf(self, sheetKeyword="STANDARD"):
+    '''Loads the correct sheet for standard and returns it'''
     sheetName = f"{sheetKeyword}_{'_'.join(self.experimentType.upper().split(' '))}"
     templateStandard = pd.read_excel(self.templateFileName, sheet_name=sheetName)
     return templateStandard
@@ -401,7 +402,10 @@ class MSDataContainer:
     print(f"The correction method for natural abundance has been updated to {newMethod}")
     self.computeNACorrectionDf()
 
-  @debounce(1.1) # make sure the function is not called over and over when textbox update call it
+  # Debouncing active for computing the NA correction.
+  # Makes for a smoother user experience (no lagging) when ion purity are changed int he textbox
+  # Note that this means that the function will be called with the specified delay after parameters are changed
+  @debounce(1.1) 
   def computeNACorrectionDf(self):
     self.dataDf_corrected = self.correctForNaturalAbundance()
     self.dataDf_labeledProportions = self.calculateLabeledProportionForAll()
@@ -419,6 +423,7 @@ class MSDataContainer:
     return dataDf_norm
 
   def correctForNaturalAbundance(self):
+    '''Correct all the data for natural abundance'''
     correctedData = self.dataDf.iloc[:, :self._dataStartIdx]
     for parentalIon in self.internalRefList:
       ionMID = self.dataDf.filter(regex=parentalIon)
@@ -446,13 +451,13 @@ class MSDataContainer:
     return (total - df.iloc[:,0])/total
 
   def calculateLabeledProportionForAll(self):
-    '''Return df of the labeling proportions for all the ions'''
+    '''Return dataFrame of the labeling proportions for all the ions'''
     proportions = pd.concat([self.calculateLabeledProportion(self.dataDf_corrected.filter(regex=parentalIon)) for parentalIon in self.internalRefList], axis=1)
     proportions.columns = self.internalRefList
     return pd.concat([self.dataDf.iloc[:, :self._dataStartIdx], proportions], axis=1)
 
   def saveStandardCurvesAndResults(self, useMask=False):
-    '''Save figures and all the relevant data in files'''
+    '''Save figures and all the relevant data'''
     self.dataDf_quantification = self.computeQuantificationFromStandardFits(useMask=useMask)
     stdAbsorbance = self.getStandardAbsorbance().iloc[:, self._dataStartIdx:]
     quantificationDf = self.dataDf_quantification.iloc[:, 3:]
@@ -573,7 +578,6 @@ class MSDataContainer:
     # will store final results
     fitDf = pd.DataFrame(index=["slope", "intercept"])
 
-    # Plot of Standard
     stdAbsorbance = self.getStandardAbsorbance().iloc[:, self._dataStartIdx:]
     assert len(stdAbsorbance) == len(self.standardDf_nMoles),\
     f"The number of standards declared in the STANDARD_{'_'.join(self.experimentType.upper().split(' '))} sheet (n={len(self.standardDf_nMoles)}) is different than the number of standards declared in the data file (n={len(stdAbsorbance)})"
@@ -607,6 +611,7 @@ class MSDataContainer:
         self._maskFAMES[col] = {"originalMask": mask}
       else:
         try:
+          # were the points used for the fit modified and a new mask created for this ion?
           mask = self._maskFAMES[col]["newMask"]
         except:
           mask = self._maskFAMES[col]["originalMask"]
@@ -618,12 +623,13 @@ class MSDataContainer:
         continue
       fitDf[col] = np.polyfit(xvalsToFit, yvalsToFit, 1)
     
-    # save fits
+    # save fits in object
     self.standardDf_fitResults = fitDf
 
     return fitDf
 
   def _checkIfParentalIonDataExistsFor(self, ion):
+    '''For a given ion, will return the corresponding parental ion if it exists'''
     try:
       # extract carbon and mass of ion
       carbon,mass = re.match("(C[0-9]+:[0-9]+) \(([0-9]+)\)", ion).groups()
@@ -632,7 +638,7 @@ class MSDataContainer:
       boolIdx = self.standardDf_nMoles.columns.str.match(f"{carbon}")
       matchingCarbons = self.standardDf_nMoles.columns[boolIdx]
       if len(matchingCarbons)>0:
-        # get mass all matching carbons and only consider the heaviest one
+        # get mass all matching carbons and only consider the heaviest one as the parental ion
         massOfMatchingCarbons = [[i,int(mass)] for i,ion in enumerate(matchingCarbons) for mass in re.match(f"{carbon} \(([0-9]+)\)", ion).groups()]
         idxHeaviest,massHeaviest = sorted(massOfMatchingCarbons, key = lambda entry: entry[1])[-1]
         return [True, matchingCarbons[idxHeaviest]]
@@ -654,6 +660,7 @@ class MSDataContainer:
     return pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], resultsDf], axis=1)
 
   def getConcatenatedStandardResults(self):
+    '''Return a formatted dataFrame with slop/intercept and nMoles for each standard'''
     return pd.concat([self.standardDf_fitResults, self.standardDf_nMoles], axis=0, sort=True)
 
 
