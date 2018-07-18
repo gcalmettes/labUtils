@@ -413,21 +413,24 @@ class MSDataContainer:
       self.volumesOfDilution = [newVolumeOfDilution]*len(self.dataDf)
     if useValueSample:
       self.volumesOfSampleSoupUsed = [newVolumeOfSampleUsed]*len(self.dataDf)
-    print(f"The volumes used for normalization have been updated to {newVolumeOfDilution} (dilution) and {newVolumeOfSampleUsed} (sample)")
+    print(f"The volumes used for normalization have been updated:\n\tVolume of dilution: {self.volumesOfDilution}\n\tVolume of sample used: {self.volumesOfSampleSoupUsed}")
 
-  def updateVolumeOfDilutionFromTemplateFile(self, columnName, variable="volOfDilution"):
+  def updateVolumeOfDilutionFromTemplateFile(self, columnName, activated, variable="dilution", backupValueDilution=750, backupValueSample=5, useBackupDilution=True, useBackupSample=True):
+    notStandardOrNegRegex = '^(?!neg|S[0-9]+$)' # not 'neg' nor any 'S1, S2, etc ...'
     templateMap = pd.read_excel(self.templateFileName, sheet_name="MAP")
-    declaredIdx = templateMap.SampleName.dropna().index
-    if variable == "volOfDilution":
+    declaredIdx = templateMap.SampleName.dropna()[templateMap.SampleName.dropna().str.match(notStandardOrNegRegex, na=False)].index
+    if ((variable == "dilution") & (activated)):
       self.volumesOfDilution = templateMap.loc[declaredIdx, columnName].values
       print(f"The dilution volumes used for normalization have been updated from template to {self.volumesOfDilution}")
-      assert len(self.volumeOfDilution.dropna())==len(declaredIdx),\
-      f"The number of volume of dilutions declared in the Template file (n={len(self.volumeOfDilution.dropna())}) is different than the number of samples declared (n={len(declaredIdx)})"
-    else:
+      assert len(self.volumesOfDilution[~np.isnan(self.volumesOfDilution)])==len(declaredIdx),\
+      f"The number of volume of dilutions declared in the Template file (n={len(self.volumesOfDilution[~np.isnan(self.volumesOfDilution)])}) is different than the number of samples declared (n={len(declaredIdx)})"
+    elif ((variable == "sample") & (activated)):
       self.volumesOfSampleSoupUsed = templateMap.loc[declaredIdx, columnName].values
       print(f"The sample volumes used for normalization have been updated from template to {self.volumesOfSampleSoupUsed}")
-      assert len(self.volumesOfSampleSoupUsed.dropna())==len(declaredIdx),\
-      f"The number of sample volumes declared in the Template file (n={len(self.volumesOfSampleSoupUsed.dropna())}) is different than the number of samples declared (n={len(declaredIdx)})"
+      assert len(self.volumesOfSampleSoupUsed[~np.isnan(self.volumesOfSampleSoupUsed)])==len(declaredIdx),\
+      f"The number of sample volumes declared in the Template file (n={len(self.volumesOfSampleSoupUsed[~np.isnan(self.volumesOfSampleSoupUsed)])}) is different than the number of samples declared (n={len(declaredIdx)})"
+    else:
+      self.updateVolumesOfSampleDilution(backupValueDilution, backupValueSample, useBackupDilution, useBackupSample)
 
   # Debouncing active for computing the NA correction.
   # Makes for a smoother user experience (no lagging) when ion purity are changed int he textbox
@@ -825,28 +828,46 @@ class MSAnalyzer:
     # variables declaration
     self.volOfDilutionVar = tk.IntVar()
     self.volOfSampleUsedVar = tk.IntVar()
+    self.useVolOfDilutionVar = tk.IntVar()
+    self.useVolOfSampleUsedVar = tk.IntVar()
 
     self.volOfDilutionVar.set(self.dataObject.volumesOfDilution[0])
     self.volOfSampleUsedVar.set(self.dataObject.volumesOfSampleSoupUsed[0])
+    self.useVolOfDilutionVar.set(False)
+    self.useVolOfSampleUsedVar.set(False)
 
     # Vol of dilution total
-    self.volOfDilutionVar.trace('w', lambda index,value,op : self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get()))
+    self.volOfDilutionVar.trace('w', lambda index,value,op : self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get(), not self.useVolOfDilutionVar.get(), not self.useVolOfSampleUsedVar.get()))
     volOfDilutionLabel = tk.Label(Normalizationframe, text="Vol. Dilution", fg="black", bg="#ECECEC")
     volOfDilutionLabel.grid(row=10, column=1, sticky=tk.W)
-    volOfDilutionSpinbox = tk.Spinbox(Normalizationframe, from_=0, to=1000, width=5, textvariable=self.volOfDilutionVar, command= lambda: self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get()), justify=tk.RIGHT)
+    volOfDilutionSpinbox = tk.Spinbox(Normalizationframe, from_=0, to=1000, width=5, textvariable=self.volOfDilutionVar, command= lambda: self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get(), not self.useVolOfDilutionVar.get(), not self.useVolOfSampleUsedVar.get()), justify=tk.RIGHT)
     volOfDilutionSpinbox.grid(row=10, column=2, sticky=tk.W, pady=3)
 
-    checkbuttonVolOfDilution = ttk.Checkbutton(Normalizationframe, text="Use volumes from template")
+    checkbuttonVolOfDilution = ttk.Checkbutton(Normalizationframe, text="Use volumes from template", variable=self.useVolOfDilutionVar, 
+                                                command=lambda: self.dataObject.updateVolumeOfDilutionFromTemplateFile("VolumeOfDilution", 
+                                                                                                                      self.useVolOfDilutionVar.get(),
+                                                                                                                      variable="dilution", 
+                                                                                                                      backupValueDilution=self.volOfDilutionVar.get(),
+                                                                                                                      backupValueSample=self.volOfSampleUsedVar.get(),
+                                                                                                                      useBackupDilution=not self.useVolOfDilutionVar.get(), 
+                                                                                                                      useBackupSample=not self.useVolOfSampleUsedVar.get()))
     checkbuttonVolOfDilution.grid(row=10, column=3)
 
     # Vol of sample used
-    self.volOfSampleUsedVar.trace('w', lambda index,value,op : self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get(), True, True))
+    self.volOfSampleUsedVar.trace('w', lambda index,value,op : self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get(), not self.useVolOfDilutionVar.get(), not self.useVolOfSampleUsedVar.get()))
     volOfSampleUsedLabel = tk.Label(Normalizationframe, text="Vol. Sample", fg="black", bg="#ECECEC")
     volOfSampleUsedLabel.grid(row=11, column=1, sticky=tk.W)
-    volOfSampleUsedSpinbox = tk.Spinbox(Normalizationframe, from_=0, to=1000, width=5, textvariable=self.volOfSampleUsedVar, command= lambda: self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get(), True, True), justify=tk.RIGHT)
+    volOfSampleUsedSpinbox = tk.Spinbox(Normalizationframe, from_=0, to=1000, width=5, textvariable=self.volOfSampleUsedVar, command= lambda: self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get(), not self.useVolOfDilutionVar.get(), not self.useVolOfSampleUsedVar.get()), justify=tk.RIGHT)
     volOfSampleUsedSpinbox.grid(row=11, column=2, sticky=tk.W, pady=3)
 
-    checkbuttonVolOfSampleUsed = ttk.Checkbutton(Normalizationframe, text="Use volumes from template")
+    checkbuttonVolOfSampleUsed = ttk.Checkbutton(Normalizationframe, text="Use volumes from template", variable=self.useVolOfSampleUsedVar, 
+                                                  command=lambda: self.dataObject.updateVolumeOfDilutionFromTemplateFile("VolumeOfSampleUsed", 
+                                                                                                                      self.useVolOfSampleUsedVar.get(),
+                                                                                                                      variable="sample", 
+                                                                                                                      backupValueDilution=self.volOfDilutionVar.get(),
+                                                                                                                      backupValueSample=self.volOfSampleUsedVar.get(),
+                                                                                                                      useBackupDilution=not self.useVolOfDilutionVar.get(), 
+                                                                                                                      useBackupSample=not self.useVolOfSampleUsedVar.get()))
     checkbuttonVolOfSampleUsed.grid(row=11, column=3)
 
     if self.dataObject.experimentType == "Labeled":
@@ -944,7 +965,7 @@ class MSAnalyzer:
     self.dataObject.updateNACMethod(newMethod)
 
   def __updateVolumesForNormalization(self, newVolumeOfDilution, newVolumeOfSampleUsed, useValueDilution, useValueSample):
-    self.dataObject.updateVolumesOfSampleDilution(self, newVolumeOfDilution, newVolumeOfSampleUsed, useValueDilution, useValueSample)
+    self.dataObject.updateVolumesOfSampleDilution(newVolumeOfDilution, newVolumeOfSampleUsed, useValueDilution, useValueSample)
 
   def computeResults(self):
     self.dataObject.saveStandardCurvesAndResults()
