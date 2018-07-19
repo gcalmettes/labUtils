@@ -252,6 +252,7 @@ class MSDataContainer:
     self.volumesOfDilution = [750]*len(self.dataDf)
     # volume (uL) of sample used in MS
     self.volumesOfSampleSoupUsed = [5]*len(self.dataDf)
+    self.weightNormalization = False
 
 
   def __getDataAndTemplateFileNames(self, fileNames, templateKeyword="template"):
@@ -432,6 +433,14 @@ class MSDataContainer:
     else:
       self.updateVolumesOfSampleDilution(backupValueDilution, backupValueSample, useBackupDilution, useBackupSample)
 
+  def updateNormalizationType(self, newType):
+    self.weightNormalization = bool(newType)
+    if (self.weightNormalization):
+      typeNorm = "by total weight"
+    else:
+      typeNorm = "by relative weight"
+    print(f"The normalization when computing the data has been changed to '{typeNorm}'")
+
   # Debouncing active for computing the NA correction.
   # Makes for a smoother user experience (no lagging) when ion purity are changed int he textbox
   # Note that this means that the function will be called with the specified delay after parameters are changed
@@ -568,12 +577,14 @@ class MSDataContainer:
     # Write each dataframe to a different worksheet.
 
     # Normalization factor:
-    # takes the normalization volumes and pad them with ones (neg and standards samples).
-    # This assumes that all the blanks/standards are on top of orderedData
-    volsDilution = np.array([1]*(len(self.dataDf_quantification)-len(self.volumesOfDilution)) + list(self.volumesOfDilution))
-    volsSampleUsed = np.array([1]*(len(self.dataDf_quantification)-len(self.volumesOfSampleSoupUsed)) + list(self.volumesOfSampleSoupUsed))
-    normalization = volsSampleUsed*self.dataDf_norm["SampleWeight"]/(volsDilution+self.dataDf_norm["SampleWeight"])
-    # normalization = self.dataDf_norm["SampleWeight"]
+    if self.weightNormalization:
+      normalization = self.dataDf_norm["SampleWeight"]
+    else:
+      # takes the normalization volumes and pad them with ones (neg and standards samples).
+      # This assumes that all the blanks/standards are on top of orderedData
+      volsDilution = np.array([1]*(len(self.dataDf_quantification)-len(self.volumesOfDilution)) + list(self.volumesOfDilution))
+      volsSampleUsed = np.array([1]*(len(self.dataDf_quantification)-len(self.volumesOfSampleSoupUsed)) + list(self.volumesOfSampleSoupUsed))
+      normalization = volsSampleUsed*self.dataDf_norm["SampleWeight"]/(volsDilution+self.dataDf_norm["SampleWeight"])
 
     # standards
     standards = self.getConcatenatedStandardResults()
@@ -828,6 +839,12 @@ class MSAnalyzer:
     Normalizationframe = ttk.LabelFrame(self.window, text="Normalization", relief=tk.RIDGE)
     Normalizationframe.grid(row=9, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2, pady=6)
     
+    self.weightNormalizationOnlyVar = tk.IntVar()
+    self.weightNormalizationOnlyVar.set(self.dataObject.weightNormalization)
+    self.weightNormalizationOnlyVar.trace('w', lambda index,value,op : self.dataObject.updateNormalizationType(self.weightNormalizationOnlyVar.get()))
+    checkbuttonVolOfDilution = ttk.Checkbutton(Normalizationframe, text="Normalize by weight only", variable=self.weightNormalizationOnlyVar)#, command=lambda: self.dataObject.updateNormalizationType(self.weightNormalizationOnlyVar.get()))
+    checkbuttonVolOfDilution.grid(row=10, column=1, columnspan=2)
+
     # variables declaration
     self.volOfDilutionVar = tk.IntVar()
     self.volOfSampleUsedVar = tk.IntVar()
@@ -842,46 +859,48 @@ class MSAnalyzer:
     # Vol of dilution total
     self.volOfDilutionVar.trace('w', lambda index,value,op : self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get(), not self.useVolOfDilutionVar.get(), not self.useVolOfSampleUsedVar.get()))
     volOfDilutionLabel = tk.Label(Normalizationframe, text="Vol. Dilution", fg="black", bg="#ECECEC")
-    volOfDilutionLabel.grid(row=10, column=1, sticky=tk.W)
+    volOfDilutionLabel.grid(row=11, column=1, sticky=tk.W)
     volOfDilutionSpinbox = tk.Spinbox(Normalizationframe, from_=0, to=1000, width=5, textvariable=self.volOfDilutionVar, command= lambda: self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get(), not self.useVolOfDilutionVar.get(), not self.useVolOfSampleUsedVar.get()), justify=tk.RIGHT)
-    volOfDilutionSpinbox.grid(row=10, column=2, sticky=tk.W, pady=3)
+    volOfDilutionSpinbox.grid(row=11, column=2, sticky=tk.W, pady=3)
 
     checkbuttonVolOfDilution = ttk.Checkbutton(Normalizationframe, text="Use volumes from template", variable=self.useVolOfDilutionVar, 
-                                                command=lambda: self.dataObject.updateVolumeOfDilutionFromTemplateFile("VolumeOfDilution", 
-                                                                                                                      self.useVolOfDilutionVar.get(),
-                                                                                                                      variable="dilution", 
-                                                                                                                      backupValueDilution=self.volOfDilutionVar.get(),
-                                                                                                                      backupValueSample=self.volOfSampleUsedVar.get(),
-                                                                                                                      useBackupDilution=not self.useVolOfDilutionVar.get(), 
-                                                                                                                      useBackupSample=not self.useVolOfSampleUsedVar.get()))
-    checkbuttonVolOfDilution.grid(row=10, column=3)
+      command=lambda: self.dataObject.updateVolumeOfDilutionFromTemplateFile(
+        "VolumeOfDilution", 
+        self.useVolOfDilutionVar.get(),
+        variable="dilution", 
+        backupValueDilution=self.volOfDilutionVar.get(),
+        backupValueSample=self.volOfSampleUsedVar.get(),
+        useBackupDilution=not self.useVolOfDilutionVar.get(), 
+        useBackupSample=not self.useVolOfSampleUsedVar.get()))
+    checkbuttonVolOfDilution.grid(row=11, column=3)
 
     # Vol of sample used
     self.volOfSampleUsedVar.trace('w', lambda index,value,op : self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get(), not self.useVolOfDilutionVar.get(), not self.useVolOfSampleUsedVar.get()))
     volOfSampleUsedLabel = tk.Label(Normalizationframe, text="Vol. Sample", fg="black", bg="#ECECEC")
-    volOfSampleUsedLabel.grid(row=11, column=1, sticky=tk.W)
+    volOfSampleUsedLabel.grid(row=12, column=1, sticky=tk.W)
     volOfSampleUsedSpinbox = tk.Spinbox(Normalizationframe, from_=0, to=1000, width=5, textvariable=self.volOfSampleUsedVar, command= lambda: self.__updateVolumesForNormalization(self.volOfDilutionVar.get(), self.volOfSampleUsedVar.get(), not self.useVolOfDilutionVar.get(), not self.useVolOfSampleUsedVar.get()), justify=tk.RIGHT)
-    volOfSampleUsedSpinbox.grid(row=11, column=2, sticky=tk.W, pady=3)
+    volOfSampleUsedSpinbox.grid(row=12, column=2, sticky=tk.W, pady=3)
 
     checkbuttonVolOfSampleUsed = ttk.Checkbutton(Normalizationframe, text="Use volumes from template", variable=self.useVolOfSampleUsedVar, 
-                                                  command=lambda: self.dataObject.updateVolumeOfDilutionFromTemplateFile("VolumeOfSampleUsed", 
-                                                                                                                      self.useVolOfSampleUsedVar.get(),
-                                                                                                                      variable="sample", 
-                                                                                                                      backupValueDilution=self.volOfDilutionVar.get(),
-                                                                                                                      backupValueSample=self.volOfSampleUsedVar.get(),
-                                                                                                                      useBackupDilution=not self.useVolOfDilutionVar.get(), 
-                                                                                                                      useBackupSample=not self.useVolOfSampleUsedVar.get()))
-    checkbuttonVolOfSampleUsed.grid(row=11, column=3)
+      command=lambda: self.dataObject.updateVolumeOfDilutionFromTemplateFile(
+        "VolumeOfSampleUsed", 
+        self.useVolOfSampleUsedVar.get(),
+        variable="sample", 
+        backupValueDilution=self.volOfDilutionVar.get(),
+        backupValueSample=self.volOfSampleUsedVar.get(),
+        useBackupDilution=not self.useVolOfDilutionVar.get(), 
+        useBackupSample=not self.useVolOfSampleUsedVar.get()))
+    checkbuttonVolOfSampleUsed.grid(row=12, column=3)
 
     if self.dataObject.experimentType == "Labeled":
       # - - - - - - - - - - - - - - - - - - - - -
       # The Natural Abundance Correction frame 
       Correctionframe = ttk.LabelFrame(self.window, text="Natural Abundance Correction", relief=tk.RIDGE)
-      Correctionframe.grid(row=12, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2, pady=6)
+      Correctionframe.grid(row=13, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2, pady=6)
 
       # Natural Abundance Correction Method
       NACLabel = tk.Label(Correctionframe, text="Method:", fg="black", bg="#ECECEC")
-      NACLabel.grid(row=13, column=1, columnspan=2, sticky=tk.W)
+      NACLabel.grid(row=14, column=1, columnspan=2, sticky=tk.W)
       self.radioCorrectionMethodVariable = tk.StringVar()
       self.radioCorrectionMethodVariable.set("LSC")
       self.radioCorrectionMethodVariable.trace('w', lambda index,value,op : self.__updateNACorrectionMethod(self.radioCorrectionMethodVariable.get()))
@@ -889,29 +908,29 @@ class MSAnalyzer:
                                      variable=self.radioCorrectionMethodVariable, value="LSC")
       methodButton2 = ttk.Radiobutton(Correctionframe, text="Skewed Matrix",
                                      variable=self.radioCorrectionMethodVariable, value="SMC")
-      methodButton1.grid(row=14, column=1, columnspan=2, sticky=tk.W)
-      methodButton2.grid(row=15, column=1 , columnspan=2, sticky=tk.W)
+      methodButton1.grid(row=15, column=1, columnspan=2, sticky=tk.W)
+      methodButton2.grid(row=16, column=1 , columnspan=2, sticky=tk.W)
 
       # isotope tracer
       TracerLabel = tk.Label(Correctionframe, text="Atom tracer:", fg="black", bg="#ECECEC")
-      TracerLabel.grid(row=12, column=3, sticky=tk.E)
+      TracerLabel.grid(row=13, column=3, sticky=tk.E)
       self.TracerListValue = tk.StringVar()
       self.TracerListValue.trace('w', lambda index,value,op : self.__updateTracer(TracerList.get()))
       TracerList = ttk.Combobox(Correctionframe, textvariable=self.TracerListValue, width=3, state="readonly", takefocus=False)
-      TracerList.grid(row=13, column=3, sticky=tk.E)
+      TracerList.grid(row=14, column=3, sticky=tk.E)
       TracerList['values'] = ["C", "H", "O"]
       TracerList.current(0)
 
       # Standards uL
       self.tracerPurity = self.dataObject.tracerPurity
       TracerPurity = CustomText(Correctionframe, height=3, width=12)
-      TracerPurity.grid(row=14, column=3, sticky=tk.E)
+      TracerPurity.grid(row=15, column=3, sticky=tk.E)
       TracerPurity.insert(tk.END, "Purity:\n"+" ".join([f"{pur}" for pur in self.tracerPurity]))
       TracerPurity.bind("<<TextModified>>", self.__updateTracerPurity)
 
       # Compute Results button
       inspectCorrectionButton = ttk.Button(Correctionframe, text="Inspect NA correction", command=lambda: self.inspectCorrectionPlots())
-      inspectCorrectionButton.grid(row=15, column=2, columnspan=2, pady=5)
+      inspectCorrectionButton.grid(row=16, column=2, columnspan=2, pady=5)
   
   def quitApp(self, window):
     # close Matplotlib processes if any
