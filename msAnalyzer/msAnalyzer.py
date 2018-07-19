@@ -1,4 +1,4 @@
-# Author: Guillaume Calmettes
+# Author: Guillaume Calmettes, PhD
 # University of Los Angeles California
 
 import os
@@ -51,26 +51,30 @@ class NAProcess:
   ## Init and setup
   ##################
 
-  def __init__(self, entry, atomTracer, purityTracer=[0, 1], FAMES=True):
+  def __init__(self, entry, atomTracer="H", purityTracer=[0, 1], FAMES=True, CHOL=False):
     self.NaturalAbundanceDistributions = self.__getNaturalAbundanceDistributions()
-    self.formula = self.getFAFormulaString(entry, FAMES)
+    self.formula = self.getFAFormulaString(entry, FAMES, CHOL)
     self.elementsDict = self.parseFormula(self.formula)
     self.atomTracer = atomTracer
     self.purityTracer = purityTracer
     self.correctionMatrix = self.computeCorrectionMatrix(self.elementsDict, self.atomTracer, self.NaturalAbundanceDistributions, purityTracer)
     
-  def getFAFormulaString(self, entry, FAMES):
+  def getFAFormulaString(self, entry, FAMES, CHOL=False):
     ''' Return formula string e.g.: C3H2O3'''
     regex = "C([0-9]+):([0-9]+)"
     carbon,doubleBond = [int(val) for val in re.findall(regex, entry)[0]]
     hydrogen = 3+(carbon-2)*2+1-2*doubleBond
     oxygen = 2
+    silicon = 0
     if (FAMES):
       carbon=carbon+1
       hydrogen=hydrogen-1+3
+    if (CHOL):
+      carbon, hydrogen, oxygen, silicon = 30, 54, 1, 1 
     return "".join(["".join([letter,str(n)]) for [letter,n] in [
               ["C", carbon], 
               ["H", hydrogen],
+              ["Si", silicon],
               ["O", oxygen]] if n>0])
 
   def parseFormula(self, formula):
@@ -227,9 +231,10 @@ class MSDataContainer:
   ## Init and setup
   ##################
 
-  def __init__(self, fileNames, internalRef="C19:0", tracer="C", tracerPurity=[0.00, 1.00]):
+  def __init__(self, fileNames, internalRef="C19:0", tracer="H", tracerPurity=[0.00, 1.00]):
     assert len(fileNames)==2 , "You must choose 2 files!"
     self.internalRef = internalRef
+    self._cholesterol = False
     self.tracer = tracer
     self.tracerPurity = tracerPurity
     self.NACMethod = "LSC" # least squares skewed matrix correction
@@ -285,6 +290,9 @@ class MSDataContainer:
     letter = df["Name"][0][0] # F or C
     df_Meta,df_Data = self.__getOrderedDfBasedOnTemplate(df, templateMap, letter)
 
+    if letter == "C":
+      self._cholesterol = True
+
     if self.experimentType == "Not Labeled":
       regex = self.__regexExpression["NotLabeled"]
       self.dataColNames = [f"C{carbon[:2]}:{carbon[2:]} ({mass})" for name in self.dataColNames for num,carbon,mass in re.findall(regex, name)]
@@ -293,24 +301,30 @@ class MSDataContainer:
     elif self.experimentType == "Labeled":
       regex = self.__regexExpression["Labeled"]
       ionAndMass = np.array([(int(num), int(mass)) for name in self.dataColNames for num,mass in re.findall(regex, name)])
-      assert ionAndMass[0][1] == 242, "Data not starting with 14:0 fatty acid!"
+      if letter == "F": # this is a FAMES file
+        assert ionAndMass[0][1] == 242, "Data not starting with 14:0 fatty acid!"
       # get indices that would sort the array by ion
       order = np.argsort([ion for ion,mass in ionAndMass])
       # reorder the columns by ions
       df_Data = df_Data.iloc[:, order]
-      FAMasses = ionAndMass[order, 1]
+      ionMasses = ionAndMass[order, 1]
       # get main FA by subtracting ions weights and checking jumps in weights
       # for the same fatty acid, the next weight always increase by 1. or it's other fatty acid
-      differences = FAMasses[1:]-FAMasses[:-1]
+      differences = ionMasses[1:]-ionMasses[:-1]
       idx = np.concatenate([[0], np.where(differences!=1)[0]+1])        
       # list of (idx, carbon, saturation)
-      FAparent = [(idx[i], np.ceil((mass-242+14*14)/14).astype(int), [int((desat!=0)*(14-desat)/2) for desat in [(mass-242)%14]][0]) for i,mass in enumerate(FAMasses[idx])]
-      self.dataColNames = [ f"C{carbon}:{sat} M.{ion}" for i,(idx,carbon,sat) in enumerate(FAparent[:-1]) for ion in range(idx-idx, FAparent[i+1][0]-idx)]
+      ionParent = [(idx[i], np.ceil((mass-242+14*14)/14).astype(int), [int((desat!=0)*(14-desat)/2) for desat in [(mass-242)%14]][0]) for i,mass in enumerate(ionMasses[idx])]
+      if letter == "F":
+        startM = 0
+      else:
+        assert len(ionParent) == 2, "For cholesterol experiment we only expect 2 parental ions!"
+        startM = -2
+      self.dataColNames = [ f"C{carbon}:{sat} M.{ion}" for i,(idx,carbon,sat) in enumerate(ionParent[:-1]) for ion in range(startM, (ionParent[i+1][0]-idx)+startM)]
       # add last carbon ions
-      self.dataColNames = self.dataColNames + [f"C{carbon}:{sat} M.{ion}" for ion in range(FAparent[-1][0]-FAparent[-1][0], len(FAMasses)-FAparent[-1][0]) for (carbon,sat) in [[FAparent[-1][1], FAparent[-1][2]]]]
+      self.dataColNames = self.dataColNames + [f"C{carbon}:{sat} M.{ion}" for ion in range(0, len(ionMasses)-ionParent[-1][0]) for (carbon,sat) in [[ionParent[-1][1], ionParent[-1][2]]]]
       df_Data.columns = self.dataColNames
       # only parental ions for internalRefList
-      self.internalRefList = [ f"C{carbon}:{sat}" for (idx,carbon,sat) in FAparent]
+      self.internalRefList = [ f"C{carbon}:{sat}" for (idx,carbon,sat) in ionParent]
 
     # get sample meta info from template file
     df_TemplateInfo = self.__getExperimentMetaInfoFromMAP(templateMap)
@@ -318,10 +332,17 @@ class MSDataContainer:
     assert len(df_TemplateInfo)==len(df_Data), \
     f"The number of declared samples in the template (n={len(df_TemplateInfo)}) does not match the number of samples detected in the data file (n={len(df_Data)})"
 
-    # save number of columns before actual data
+    # save the number of columns (meta info) before the actual data
     self._dataStartIdx = len(df_Meta.columns)+len(df_TemplateInfo.columns)
-    
-    return pd.concat([df_Meta, df_TemplateInfo, df_Data.fillna(0)], axis=1)
+
+    if letter == "F":
+      dataDf = pd.concat([df_Meta, df_TemplateInfo, df_Data.fillna(0)], axis=1)
+    else:
+      # if chol experiment, remove the M.-2 and M.-1
+      dataDf = pd.concat([df_Meta, df_TemplateInfo, df_Data.iloc[:, 2:].fillna(0)], axis=1)
+      # but save a copy with everything for posterity
+      self.dataDf_chol = pd.concat([df_Meta, df_TemplateInfo, df_Data.fillna(0)], axis=1)
+    return dataDf
 
   def __getOrderedDfBasedOnTemplate(self, df, templateMap, letter="F", skipCols=7):
     '''Get new df_Data and df_Meta based on template'''
@@ -353,7 +374,11 @@ class MSDataContainer:
     return templateStandard
 
   def __makeResultFolder(self):
-    directory = f"{self.pathDirName}/results-{self._baseFileName}"
+    if self._cholesterol:
+      suffix = "-CHOL"
+    else:
+      suffix = ""
+    directory = f"{self.pathDirName}/results-{self._baseFileName}{suffix}"
     if not os.path.exists(directory):
       os.mkdir(directory)
     return directory
@@ -473,7 +498,7 @@ class MSDataContainer:
         print(parentalIon, "doesn't have non parental ions")
         correctedData = pd.concat([correctedData, ionMID], axis=1)
         continue
-      ionNA = NAProcess(parentalIon, self.tracer, purityTracer=self.tracerPurity)
+      ionNA = NAProcess(parentalIon, self.tracer, purityTracer=self.tracerPurity, CHOL=self._cholesterol)
       correctedIonData = ionNA.correctForNaturalAbundance(ionMID, method=self.NACMethod)
       correctedData = pd.concat([correctedData, correctedIonData], axis=1)
 
@@ -482,7 +507,11 @@ class MSDataContainer:
 
   def calculateSumIonsForAll(self):
     '''Return df of the summed fractions for all the ions'''
-    sumFrac = pd.concat([self.dataDf.filter(regex=parentalIon).sum(axis=1) for parentalIon in self.internalRefList], axis=1)
+    if self._cholesterol:
+      dataToSum = self.dataDf_chol
+    else:
+      dataToSum = self.dataDf
+    sumFrac = pd.concat([dataToSum.filter(regex=parentalIon).sum(axis=1) for parentalIon in self.internalRefList], axis=1)
     sumFrac.columns = self.internalRefList
     return sumFrac
 
@@ -551,7 +580,7 @@ class MSDataContainer:
       ax1.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "o", mfc="none", color="black", mew=2)
       ax1.plot(xfit, yfit, "-", color="#fb4c52")
       ax1.text(ax1.get_xlim()[0]+(ax1.get_xlim()[1]-ax1.get_xlim()[0])*0.05, ax1.get_ylim()[0]+(ax1.get_ylim()[1]-ax1.get_ylim()[0])*0.9, f"R2={r2:.4f}", size=14, color="#ce4ad0")
-      ax1.text(ax1.get_xlim()[0]+(ax1.get_xlim()[1]-ax1.get_xlim()[0])*0.97, ax1.get_ylim()[0]+(ax1.get_ylim()[1]-ax1.get_ylim()[0])*0.05, f"y={r2:.4f}", size=14, color="#fb4c52", ha="right")
+      ax1.text(ax1.get_xlim()[0]+(ax1.get_xlim()[1]-ax1.get_xlim()[0])*0.97, ax1.get_ylim()[0]+(ax1.get_ylim()[1]-ax1.get_ylim()[0])*0.05, f"y={slope:.4f}x+{intercept:.4f}", size=14, color="#fb4c52", ha="right")
       ax1.set_title(col)
       ax1.set_xlabel("Quantity (nMoles)")
       ax1.set_ylabel("Absorbance")
@@ -576,7 +605,11 @@ class MSDataContainer:
     plt.close('all')
 
     # Create a Pandas Excel writer using XlsxWriter as the engine.
-    writer = pd.ExcelWriter(f"{savePath}/results-{self._baseFileName}{extension}.xlsx", engine='xlsxwriter')
+    if self._cholesterol:
+      suffix = "-CHOL"
+    else:
+      suffix = ""
+    writer = pd.ExcelWriter(f"{savePath}/results-{self._baseFileName}{suffix}{extension}.xlsx", engine='xlsxwriter')
 
     normalization = self.getNormalizationArray()
     # Write each dataframe to a different worksheet.
@@ -781,7 +814,11 @@ class MSAnalyzer:
     FAMESListLabel.grid(row=2, column=1, sticky=tk.W + tk.N)
 
     # by default, choose internal reference defined in dataObject (C19:0)
-    idxInternalRef = [i for i,name in enumerate(self.FANames) if self.dataObject.internalRef in name][0]
+    try:
+      idxInternalRef = [i for i,name in enumerate(self.FANames) if self.dataObject.internalRef in name][0]
+    except:
+      # it was probably a cholesterol file, take last ion as internal reference by default
+      idxInternalRef = len(self.FANames)-1
 
     self.FAMESLabelCurrent = tk.Label(FAMESframe, text=f"The current internal control is {self.FANames[idxInternalRef]}", fg="white", bg="black")
     self.FAMESLabelCurrent.grid(row=3, column=1, columnspan=3)
@@ -925,7 +962,7 @@ class MSAnalyzer:
       TracerList = ttk.Combobox(Correctionframe, textvariable=self.TracerListValue, width=3, state="readonly", takefocus=False)
       TracerList.grid(row=14, column=3, sticky=tk.E)
       TracerList['values'] = ["C", "H", "O"]
-      TracerList.current(0)
+      TracerList.current([i for i,tracer in enumerate(TracerList['values']) if tracer==self.dataObject.tracer][0])
 
       # Standards uL
       self.tracerPurity = self.dataObject.tracerPurity
@@ -1296,13 +1333,14 @@ if __name__ == '__main__':
     else:
       print("Dvt: Labeled expt")
       # labeled
-      filenames = ["data/ex-data-labeled.xlsx", "data/template_labeled.xlsx"]
+      # filenames = ["data/ex-data-labeled.xlsx", "data/template_labeled.xlsx"]
+      # appData = MSDataContainer(filenames)
+      # appData.updateStandards(40, 500, [1, 5, 10, 20, 40, 80])
+      # appData.computeNACorrectionDf()
+      # appData.dataDf_norm = appData.computeNormalizedData()
+      # appData.computeStandardFits()
+      filenames = ["dataChol/file.xlsx", "dataChol/template.xlsx"]
       appData = MSDataContainer(filenames)
-      appData.updateStandards(40, 500, [1, 5, 10, 20, 40, 80])
-      appData.computeNACorrectionDf()
-      appData.dataDf_norm = appData.computeNormalizedData()
-      appData.computeStandardFits()
-
   ##########################################
   ## This is what __main__ should look like
   else:
@@ -1323,6 +1361,8 @@ if __name__ == '__main__':
       \tData file: {appData.dataFileName}
       \tTemplate file: {appData.templateFileName}""")
     print(f"The experiment type detected is '{appData.experimentType}'")
+    if appData._cholesterol:
+      print("The files loaded have CHOLESTEROL data")
 
 
     # Create the entire GUI program and pass in colNames for popup menu
