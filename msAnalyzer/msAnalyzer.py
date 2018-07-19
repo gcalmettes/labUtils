@@ -237,7 +237,8 @@ class MSDataContainer:
     self._baseFileName = os.path.basename(self.dataFileName).split('.')[0]
     self.pathDirName = os.path.dirname(self.dataFileName)
     self.__regexExpression = {"NotLabeled": "([0-9]+)_([0-9]+)_([0-9]+)",
-                              "Labeled": "([0-9]+)_([0-9]+).[0-9]+"}
+                              "Labeled": "([0-9]+)_([0-9]+).[0-9]+",
+                              "Samples": '^(?!neg|S[0-9]+$)'}
     self.experimentType, self.dataColNames = self.__getExperimentTypeAndDataColumNames()
     self.dataDf = self.__getCleanedUpDataFrames()
     self.__standardDf_template = self.__getStandardsTemplateDf()
@@ -249,9 +250,11 @@ class MSDataContainer:
 
     # for normalization
     # volume (uL) in which the original sample was diluted
-    self.volumesOfDilution = [750]*len(self.dataDf)
+    samplesLoc = self.dataDf.SampleName.str.match(self.__regexExpression["Samples"], na=False)
+    self.numberOfSamples = len(self.dataDf.loc[samplesLoc])
+    self.volumesOfDilution = [750]*self.numberOfSamples
     # volume (uL) of sample used in MS
-    self.volumesOfSampleSoupUsed = [5]*len(self.dataDf)
+    self.volumesOfSampleSoupUsed = [5]*self.numberOfSamples
     self.weightNormalization = False
 
 
@@ -411,15 +414,14 @@ class MSDataContainer:
 
   def updateVolumesOfSampleDilution(self, newVolumeOfDilution, newVolumeOfSampleUsed, useValueDilution=True, useValueSample=True):
     if useValueDilution:
-      self.volumesOfDilution = [newVolumeOfDilution]*len(self.dataDf)
+      self.volumesOfDilution = [newVolumeOfDilution]*self.numberOfSamples
     if useValueSample:
-      self.volumesOfSampleSoupUsed = [newVolumeOfSampleUsed]*len(self.dataDf)
+      self.volumesOfSampleSoupUsed = [newVolumeOfSampleUsed]*self.numberOfSamples
     print(f"The volumes used for normalization have been updated:\n\tVolume of dilution: {self.volumesOfDilution}\n\tVolume of sample used: {self.volumesOfSampleSoupUsed}")
 
   def updateVolumeOfDilutionFromTemplateFile(self, columnName, activated, variable="dilution", backupValueDilution=750, backupValueSample=5, useBackupDilution=True, useBackupSample=True):
-    notStandardOrNegRegex = '^(?!neg|S[0-9]+$)' # not 'neg' nor any 'S1, S2, etc ...'
     templateMap = pd.read_excel(self.templateFileName, sheet_name="MAP")
-    declaredIdx = templateMap.SampleName.dropna()[templateMap.SampleName.dropna().str.match(notStandardOrNegRegex, na=False)].index
+    declaredIdx = templateMap.SampleName.dropna()[templateMap.SampleName.dropna().str.match(self.__regexExpression["Samples"], na=False)].index
     if ((variable == "dilution") & (activated)):
       self.volumesOfDilution = templateMap.loc[declaredIdx, columnName].values
       print(f"The dilution volumes used for normalization have been updated from template to {self.volumesOfDilution}")
@@ -576,22 +578,13 @@ class MSDataContainer:
 
     # Write each dataframe to a different worksheet.
 
-    # Normalization factor:
-    if self.weightNormalization:
-      normalization = self.dataDf_norm["SampleWeight"]
-    else:
-      # takes the normalization volumes and pad them with ones (neg and standards samples).
-      # This assumes that all the blanks/standards are on top of orderedData
-      volsDilution = np.array([1]*(len(self.dataDf_quantification)-len(self.volumesOfDilution)) + list(self.volumesOfDilution))
-      volsSampleUsed = np.array([1]*(len(self.dataDf_quantification)-len(self.volumesOfSampleSoupUsed)) + list(self.volumesOfSampleSoupUsed))
-      normalization = volsSampleUsed*self.dataDf_norm["SampleWeight"]/(volsDilution+self.dataDf_norm["SampleWeight"])
-
+    normalization = self.getNormalizationArray()
+    
     # standards
     standards = self.getConcatenatedStandardResults()
     standards.to_excel(writer, sheet_name='Standards', index=True)
     # data
-    notStandardOrNegRegex = '^(?!neg|S[0-9]+$)' # not 'neg' nor any 'S1, S2, etc ...'
-    expDataLoc = self.dataDf_quantification.SampleName.str.match(notStandardOrNegRegex, na=False)
+    expDataLoc = self.dataDf_quantification.SampleName.str.match(self.__regexExpression["Samples"], na=False)
     self.dataDf_quantification.loc[expDataLoc].to_excel(writer, sheet_name='QuantTotal_nMoles', index=False)
     resNorm = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], quantificationDf.divide(normalization, axis=0)], axis=1)
     resNorm.loc[expDataLoc].to_excel(writer, sheet_name='QuantTotal_nMoles_mg', index=False)
@@ -613,6 +606,17 @@ class MSDataContainer:
     print(f"The standard curves have been saved at {savePath}/standard-fit{extension}.pdf")
     print(f"The results calculated from the standard regression lines have been saved at {savePath}/standard-fit-with-data{extension}.pdf")
     print(f"The analysis results have been saved at {savePath}/results{extension}.xls")
+
+  def getNormalizationArray(self):
+    '''Return an index-aware normalization factor for all the samples'''
+    normalization = self.dataDf_norm["SampleWeight"]
+    if not self.weightNormalization:
+      # if not by weight only
+      normalization = normalization.replace(normalization, 1)
+      samplesLoc = self.dataDf.SampleName.str.match(self.__regexExpression["Samples"], na=False)
+      samplesWeights = self.dataDf_norm["SampleWeight"].loc[samplesLoc]
+      normalization.loc[samplesLoc] = self.volumesOfSampleSoupUsed*samplesWeights/(self.volumesOfDilution+samplesWeights)
+    return normalization
 
   def computeStandardFits(self, useMask=False):
     ''' Return a dataFrame of the slope/intercept for all the valid standards'''
