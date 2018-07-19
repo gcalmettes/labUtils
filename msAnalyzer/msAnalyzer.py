@@ -566,11 +566,14 @@ class MSDataContainer:
     writer = pd.ExcelWriter(f"{savePath}/results-{self._baseFileName}{extension}.xlsx", engine='xlsxwriter')
 
     # Write each dataframe to a different worksheet.
-    if self.experimentType == "Not Labeled":
-      # normalization = self.dataDf_norm["SampleWeight"]
-      normalization = self.volumesOfSampleSoupUsed*self.dataDf_norm["SampleWeight"]/(self.volumesOfDilution+self.dataDf_norm["SampleWeight"])
-    else:
-      normalization = self.volumesOfSampleSoupUsed*self.dataDf_norm["SampleWeight"]/(self.volumesOfDilution+self.dataDf_norm["SampleWeight"])
+
+    # Normalization factor:
+    # takes the normalization volumes and pad them with ones (neg and standards samples).
+    # This assumes that all the blanks/standards are on top of orderedData
+    volsDilution = np.array([1]*(len(self.dataDf_quantification)-len(self.volumesOfDilution)) + list(self.volumesOfDilution))
+    volsSampleUsed = np.array([1]*(len(self.dataDf_quantification)-len(self.volumesOfSampleSoupUsed)) + list(self.volumesOfSampleSoupUsed))
+    normalization = volsSampleUsed*self.dataDf_norm["SampleWeight"]/(volsDilution+self.dataDf_norm["SampleWeight"])
+    # normalization = self.dataDf_norm["SampleWeight"]
 
     # standards
     standards = self.getConcatenatedStandardResults()
