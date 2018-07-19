@@ -499,6 +499,15 @@ class MSDataContainer:
 
   def saveStandardCurvesAndResults(self, useMask=False):
     '''Save figures and all the relevant data'''
+
+    # get current folder and create result folder if needed
+    savePath = self.__makeResultFolder()
+
+    if not useMask:
+      extension = ""
+    else:
+      extension = "_modified"
+
     self.dataDf_quantification = self.computeQuantificationFromStandardFits(useMask=useMask)
     stdAbsorbance = self.getStandardAbsorbance().iloc[:, self._dataStartIdx:]
     quantificationDf = self.dataDf_quantification.iloc[:, 3:]
@@ -514,15 +523,11 @@ class MSDataContainer:
     # fig1 (only standards) and fig2 (standards + calculated FAMES concentration)
     fig1,axes1 = plt.subplots(ncols=nCols, nrows=nRows, figsize=(20, nRows*4), constrained_layout=True)
     fig2,axes2 = plt.subplots(ncols=nCols, nrows=nRows, figsize=(20, nRows*4), constrained_layout=True)
-    suptitle1 = fig1.suptitle(f"Experiment: {self._baseFileName}")
-    suptitle2 = fig2.suptitle(f"Experiment: {self._baseFileName}")
 
-    if not useMask:
-      extension = ""
-    else:
-      extension = "_modified"
+    fig1.suptitle(f"Experiment: {self._baseFileName}")
+    fig2.suptitle(f"Experiment: {self._baseFileName}")
 
-    for i,(col,ax1,ax2) in enumerate(zip(quantificationDf.columns,  axes1.ravel(), axes2.ravel())):
+    for i,(col,ax1,ax2) in enumerate(zip(quantificationDf.columns,  axes1.flatten(), axes2.flatten())):
       # if slope/intercept from standard are present for this ion, then continue
       slope,intercept,r2 = self.standardDf_fitResults.loc[["slope", "intercept", "R2"], col]
       
@@ -560,26 +565,21 @@ class MSDataContainer:
       ax2.set_title(col)
       ax2.set_xlabel("Quantity (nMoles)")
       ax2.set_ylabel("Absorbance")
-    
+
     #####################
     # Save data and figures
 
-    # get current folder and create result folder if needed
-    savePath = self.__makeResultFolder()
-
     # save figures
-    fig1.savefig(f"{savePath}/standard-fit{extension}.pdf", bbox_extra_artists=(suptitle1,), bbox_inches="tight")
-    fig2.savefig(f"{savePath}/standard-fit-with-data{extension}.pdf", bbox_extra_artists=(suptitle2,), bbox_inches="tight")
+    fig1.savefig(f"{savePath}/standard-fit{extension}.pdf")
+    fig2.savefig(f"{savePath}/standard-fit-with-data{extension}.pdf")
     # close Matplotlib processes
     plt.close('all')
 
     # Create a Pandas Excel writer using XlsxWriter as the engine.
     writer = pd.ExcelWriter(f"{savePath}/results-{self._baseFileName}{extension}.xlsx", engine='xlsxwriter')
 
-    # Write each dataframe to a different worksheet.
-
     normalization = self.getNormalizationArray()
-    
+    # Write each dataframe to a different worksheet.
     # standards
     standards = self.getConcatenatedStandardResults()
     standards.to_excel(writer, sheet_name='Standards', index=True)
