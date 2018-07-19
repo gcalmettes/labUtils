@@ -524,7 +524,7 @@ class MSDataContainer:
 
     for i,(col,ax1,ax2) in enumerate(zip(quantificationDf.columns,  axes1.ravel(), axes2.ravel())):
       # if slope/intercept from standard are present for this ion, then continue
-      slope,intercept = self.standardDf_fitResults.loc[["slope", "intercept"], col]
+      slope,intercept,r2 = self.standardDf_fitResults.loc[["slope", "intercept", "R2"], col]
       
       # standards values and fits
       try:
@@ -545,8 +545,8 @@ class MSDataContainer:
       ax1.plot(xvals[mask], yvals[mask], "o", color="#00BFFF")
       ax1.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "o", mfc="none", color="black", mew=2)
       ax1.plot(xfit, yfit, "-", color="#fb4c52")
-      ax1.text(ax1.get_xlim()[0]+(ax1.get_xlim()[1]-ax1.get_xlim()[0])*0.05, ax1.get_ylim()[0]+(ax1.get_ylim()[1]-ax1.get_ylim()[0])*0.9, f"R2={stats.pearsonr(xvals[mask], yvals[mask])[0]**2:.4f}", size=14, color="#ce4ad0")
-      ax1.text(ax1.get_xlim()[0]+(ax1.get_xlim()[1]-ax1.get_xlim()[0])*0.97, ax1.get_ylim()[0]+(ax1.get_ylim()[1]-ax1.get_ylim()[0])*0.05, f"y={slope:.4f}x+{intercept:.4f}", size=14, color="#fb4c52", ha="right")
+      ax1.text(ax1.get_xlim()[0]+(ax1.get_xlim()[1]-ax1.get_xlim()[0])*0.05, ax1.get_ylim()[0]+(ax1.get_ylim()[1]-ax1.get_ylim()[0])*0.9, f"R2={r2:.4f}", size=14, color="#ce4ad0")
+      ax1.text(ax1.get_xlim()[0]+(ax1.get_xlim()[1]-ax1.get_xlim()[0])*0.97, ax1.get_ylim()[0]+(ax1.get_ylim()[1]-ax1.get_ylim()[0])*0.05, f"y={r2:.4f}", size=14, color="#fb4c52", ha="right")
       ax1.set_title(col)
       ax1.set_xlabel("Quantity (nMoles)")
       ax1.set_ylabel("Absorbance")
@@ -622,7 +622,7 @@ class MSDataContainer:
     ''' Return a dataFrame of the slope/intercept for all the valid standards'''
     
     # will store final results
-    fitDf = pd.DataFrame(index=["slope", "intercept"])
+    fitDf = pd.DataFrame(index=["slope", "intercept", "R2"])
 
     stdAbsorbance = self.getStandardAbsorbance().iloc[:, self._dataStartIdx:]
     assert len(stdAbsorbance) == len(self.standardDf_nMoles),\
@@ -667,7 +667,9 @@ class MSDataContainer:
       if ((len(xvalsToFit)<3)|len(yvalsToFit)<3):
         print(f"Standard fit of {col} skipped (not enough values)")
         continue
-      fitDf[col] = np.polyfit(xvalsToFit, yvalsToFit, 1)
+      # fitDf[col] = np.polyfit(xvalsToFit, yvalsToFit, 1)
+      slope,intercept,rvalue,pvalue,stderr = stats.linregress(xvalsToFit, yvalsToFit)
+      fitDf[col] = [slope, intercept, rvalue**2]
     
     # save fits in object
     self.standardDf_fitResults = fitDf
@@ -1078,7 +1080,12 @@ class MSAnalyzer:
   def plotIsolatedFAMES(self, famesName, ax, canvas, pointsListbox, direction=1):
     ax.clear()
 
-    xvals = self.dataObject.standardDf_nMoles[famesName].values
+    try:
+      xvals = self.dataObject.standardDf_nMoles[famesName].values
+    except:
+      # it means that nMoles from parental ion were used
+      parentalIon = self.dataObject._checkIfParentalIonDataExistsFor(famesName)[1]
+      xvals = self.dataObject.standardDf_nMoles[parentalIon].values
     yvals = self.dataObject.getStandardAbsorbance()[famesName].values
 
     if direction == 1:
@@ -1093,7 +1100,7 @@ class MSAnalyzer:
           y = f"{y:.3f}"
         pointsListbox.insert(tk.END, f" point{i}: ({x:.3f}, {y})")
 
-    maskSelected = [not (i in pointsListbox.curselection()) for i in range(len(self.dataObject.standardDf_nMoles[famesName].values))]
+    maskSelected = [not (i in pointsListbox.curselection()) for i in range(len(xvals))]
     newMask = [(m1 & m2) for m1,m2 in zip(self.dataObject._maskFAMES[famesName]["originalMask"], maskSelected)]
     self.dataObject._maskFAMES[famesName]["newMask"] = newMask
 
@@ -1110,7 +1117,8 @@ class MSAnalyzer:
 
     ax.plot(xvals[newMask], yvals[newMask], "o", color="#00BFFF")
     ax.plot(xvals[[not i for i in newMask]], yvals[[not i for i in newMask]], "o", color="#fb4c52")
-    slope,intercept = np.polyfit(np.array(xvals[newMask], dtype=float), np.array(yvals[newMask], dtype=float), 1)
+    # slope,intercept = np.polyfit(np.array(xvals[newMask], dtype=float), np.array(yvals[newMask], dtype=float), 1)
+    slope,intercept,rvalue,pvalue,stderr = stats.linregress(np.array(xvals[newMask], dtype=float), np.array(yvals[newMask], dtype=float))
     xfit = [np.min(xvals), np.max(xvals)]
     yfit = np.polyval([slope, intercept], xfit)
     # plot of data
