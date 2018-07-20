@@ -630,7 +630,11 @@ class MSDataContainer:
       res_newlySynthetizedMoles_norm.loc[expDataLoc].to_excel(writer, sheet_name='QuantSynthetized_nMoles_mg', index=False)
       labeledProp = self.dataDf_labeledProportions[["SampleID", "SampleName", "Comments", *self.dataDf_labeledProportions.columns[self._dataStartIdx:]]]
       labeledProp.loc[expDataLoc].to_excel(writer, sheet_name='PercentageSynthetized', index=False)
-    self.dataDf.to_excel(writer, sheet_name='OriginalData', index=False)
+    if self._cholesterol:
+      originalData = self.dataDf_chol
+    else:
+      originalData = self.dataDf
+    originalData.to_excel(writer, sheet_name='OriginalData', index=False)
     self.dataDf_norm.to_excel(writer, sheet_name='OriginalData_normToInternalRef', index=False)
   
     # add a sheet with experiment log
