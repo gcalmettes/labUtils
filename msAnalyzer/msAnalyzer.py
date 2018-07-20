@@ -633,6 +633,22 @@ class MSDataContainer:
     self.dataDf.to_excel(writer, sheet_name='OriginalData', index=False)
     self.dataDf_norm.to_excel(writer, sheet_name='OriginalData_normToInternalRef', index=False)
   
+    # add a sheet with experiment log
+    nSamples = len(self.volumesOfDilution)
+    log = {
+      "Experiment type": [self.experimentType] + [np.nan]*(nSamples-1),
+      "Volume Mix Total": [self.volumeMixTotal] + [np.nan]*(nSamples-1),
+      "Volume Mix Used": [self.volumeMixForPrep] + [np.nan]*(nSamples-1),
+      "Internal Reference": [self.internalRef] + [np.nan]*(nSamples-1),
+      "Volume standards": list(self.volumeStandards) + [np.nan]*(nSamples-len(self.volumeStandards)),
+      "Volume of Dilution": self.volumesOfDilution,
+      "Volume of Sample Measured": self.volumesOfSampleSoupUsed,
+      "Normalization": ["Weigth only" if self.weightNormalization else "Relative Weight"] + [np.nan]*(nSamples-1),
+      "Isotope tracer": [self.tracer] + [np.nan]*(nSamples-1),
+      "Isotope tracer purity": list(self.tracerPurity) + [np.nan]*(nSamples-len(self.tracerPurity))
+    }
+    pd.DataFrame(log).transpose().to_excel(writer, sheet_name='Log', index=True)
+
     # Close the Pandas Excel writer and output the Excel file.
     writer.save()
     
@@ -1324,11 +1340,11 @@ if __name__ == '__main__':
       # not labeled ex
       # filenames = ["data/ex-data-not-labeled.xlsx", "data/template_not_labeled.xlsx"]
       # filenames = ["data2/171125DHAmilk2.xlsx", "data2/template.xlsx"]
-      filenames = ["data3/lung.xlsx", "data3/template-lung.xlsx"]
+      filenames = ["data/example-unlabeled-expt/expt-not-labeled.xlsx", "data/example-unlabeled-expt/template_not_labeled.xlsx"]
       appData = MSDataContainer(filenames)
       newInternalRef = [name for name in appData.internalRefList if appData.internalRef in name][0]
       appData.updateInternalRef(newInternalRef)
-      appData.updateStandards(244, 250, [1, 5, 10])
+      appData.updateStandards(244, 250, [1, 5, 10, 20, 40, 80])
       appData.computeStandardFits()
     else:
       print("Dvt: Labeled expt")
@@ -1339,7 +1355,8 @@ if __name__ == '__main__':
       # appData.computeNACorrectionDf()
       # appData.dataDf_norm = appData.computeNormalizedData()
       # appData.computeStandardFits()
-      filenames = ["dataChol/file.xlsx", "dataChol/template.xlsx"]
+      filenames = ["data/example-cholesterol/expt-chol.xlsx", "data/example-cholesterol/template.xlsx"]
+
       appData = MSDataContainer(filenames)
   ##########################################
   ## This is what __main__ should look like
