@@ -293,6 +293,8 @@ class MSDataContainer:
     if letter == "C":
       self._cholesterol = True
 
+    # Get correct column names based on experiment type detection
+    # might need to make a specific function for this task if too much cases
     if self.experimentType == "Not Labeled":
       regex = self.__regexExpression["NotLabeled"]
       self.dataColNames = [f"C{carbon[:2]}:{carbon[2:]} ({mass})" for name in self.dataColNames for num,carbon,mass in re.findall(regex, name)]
