@@ -335,7 +335,7 @@ class MSDataContainer:
     # save the number of columns (meta info) before the actual data
     self._dataStartIdx = len(df_Meta.columns)+len(df_TemplateInfo.columns)
 
-    if letter == "F":
+    if (letter == "F") | (self.experimentType == "Not Labeled"):
       dataDf = pd.concat([df_Meta, df_TemplateInfo, df_Data.fillna(0)], axis=1)
     else:
       # if chol experiment, remove the M.-2 and M.-1
@@ -630,7 +630,7 @@ class MSDataContainer:
       res_newlySynthetizedMoles_norm.loc[expDataLoc].to_excel(writer, sheet_name='QuantSynthetized_nMoles_mg', index=False)
       labeledProp = self.dataDf_labeledProportions[["SampleID", "SampleName", "Comments", *self.dataDf_labeledProportions.columns[self._dataStartIdx:]]]
       labeledProp.loc[expDataLoc].to_excel(writer, sheet_name='PercentageSynthetized', index=False)
-    if self._cholesterol:
+    if (self._cholesterol) & (self.experimentType=="Labeled"):
       originalData = self.dataDf_chol
     else:
       originalData = self.dataDf
@@ -1344,11 +1344,15 @@ if __name__ == '__main__':
       # not labeled ex
       # filenames = ["data/ex-data-not-labeled.xlsx", "data/template_not_labeled.xlsx"]
       # filenames = ["data2/171125DHAmilk2.xlsx", "data2/template.xlsx"]
-      filenames = ["data/example-unlabeled-expt/expt-not-labeled.xlsx", "data/example-unlabeled-expt/template_not_labeled.xlsx"]
+      # filenames = ["data/example-unlabeled-expt/expt-not-labeled.xlsx", "data/example-unlabeled-expt/template_not_labeled.xlsx"]
+      filenames = ["Dylan/_chol-2/template-Lung Pilot.xlsx", "Dylan/_chol-2/LungPilot-CHOL-Parental ion only.xlsx"]
       appData = MSDataContainer(filenames)
-      newInternalRef = [name for name in appData.internalRefList if appData.internalRef in name][0]
+      try:
+        newInternalRef = [name for name in appData.internalRefList if appData.internalRef in name][0]
+      except:
+        newInternalRef = appData.internalRefList[-1]
       appData.updateInternalRef(newInternalRef)
-      appData.updateStandards(244, 250, [1, 5, 10, 20, 40, 80])
+      # appData.updateStandards(244, 250, [1, 5, 10, 20, 40, 80])
       appData.computeStandardFits()
     else:
       print("Dvt: Labeled expt")
