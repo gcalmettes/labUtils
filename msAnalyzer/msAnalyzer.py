@@ -593,6 +593,8 @@ class MSDataContainer:
       ax2.plot(xfit, yfit, "-", color="#fb4c52")
       # add values calculated from curve (visually adjust for normalization by weight done above)
       ax2.plot(quantificationDf[col], self.dataDf_norm[col], "o", color="#FF8B22", alpha=0.3)
+      ax2.text(ax1.get_xlim()[0]+(ax2.get_xlim()[1]-ax2.get_xlim()[0])*0.05, ax2.get_ylim()[0]+(ax2.get_ylim()[1]-ax2.get_ylim()[0])*0.9, f"R2={r2:.4f}", size=14, color="#ce4ad0")
+      ax2.text(ax1.get_xlim()[0]+(ax2.get_xlim()[1]-ax2.get_xlim()[0])*0.97, ax2.get_ylim()[0]+(ax2.get_ylim()[1]-ax2.get_ylim()[0])*0.05, f"y={slope:.4f}x+{intercept:.4f}", size=14, color="#fb4c52", ha="right")
       ax2.set_title(col)
       ax2.set_xlabel("Quantity (nMoles)")
       ax2.set_ylabel("Absorbance")
