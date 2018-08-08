@@ -17,6 +17,7 @@ import pandas as pd
 import scipy.stats as stats
 from scipy import optimize
 from multiprocessing import Pool
+from itertools import groupby
 
 
 # from https://gist.github.com/walkermatt/2871026
@@ -243,9 +244,11 @@ class MSDataContainer:
     self.pathDirName = os.path.dirname(self.dataFileName)
     self.__regexExpression = {"NotLabeled": "([0-9]+)_([0-9]+)_([0-9]+)",
                               "Labeled": "([0-9]+)_([0-9]+).[0-9]+",
-                              "Samples": '^(?!neg|S[0-9]+$)'}
-    self.experimentType, self.dataColNames = self.__getExperimentTypeAndDataColumNames()
-    self.dataDf = self.__getCleanedUpDataFrames()
+                              "Samples": '^(?!neg|S[0-9]+$)',
+                              "colNames": '([0-9]+)_([0-9]+)[.|_][0-9]+_([0-9]+)'}
+    # self.experimentType, self.dataColNames = self.__getExperimentTypeAndDataColumNames()
+    # self.dataDf = self.__getCleanedUpDataFrames()
+    self.dataDf = self._computeFileAttributes()
     self.__standardDf_template = self.__getStandardsTemplateDf()
     self.volumeMixTotal = 500
     self.volumeMixForPrep = 100
@@ -269,64 +272,68 @@ class MSDataContainer:
     templateFileName = [fileName for fileName in fileNames if fileName != dataFileName][0]
     return [dataFileName, templateFileName]
 
-  def __getExperimentTypeAndDataColumNames(self):
-    """Determine the type of experiment (Labeled/Unlabeled) based on column names"""
-    colNames = pd.read_excel(self.dataFileName, nrows=2).filter(regex="[0-9]+[.|_][0-9]+[.|_][0-9]+").columns
-    if len(re.findall(self.__regexExpression["NotLabeled"], colNames[0]))==1:
-      experimentType = "Not Labeled"
-    elif len(re.findall(self.__regexExpression["Labeled"], colNames[0]))==1:
-      experimentType = "Labeled"
-    else:
-      raise Error("The experiment type could not be determined")
-    return experimentType,colNames
+  def __parseIon(self, ion):
+    ionID, ionMass, ionDescription = re.findall(self.__regexExpression["colNames"], ion)[0]
+    return {"id": int(ionID), "mass": int(ionMass), "description": ionDescription}
 
-  def __getCleanedUpDataFrames(self):
-    '''Return a simplified pandas dataFrame'''
+  def __parseSampleColumns(self, columnNames):
+    # indexed ions from columns
+    ions = map(lambda name: self.__parseIon(name), columnNames)
+    return list(ions)#[self.__getIndexedIon(ion, i) for i,ion in enumerate(ions)]
+
+  def __isLabeledExperiment(self, ionsDetected):
+    # if more than 40% of the ions are duplicate, it probably means that the file is 
+    # from a labeled experimnets (lots of fragments for each ion)
+    ionsList = list(map(lambda ion: ion["description"], ionsDetected))
+    uniqueIons = set(ionsList)
+    return len(uniqueIons)/len(ionsList) < 0.6
+
+
+  def _computeFileAttributes(self):
     
+    # extract columns
+    columnsOfInterest = pd.read_excel(self.dataFileName, nrows=2).filter(regex=self.__regexExpression["colNames"]).columns
     # load data and template files and isolate data part
     df = pd.read_excel(self.dataFileName, skiprows=1)
     templateMap = pd.read_excel(self.templateFileName, sheet_name="MAP")
 
+    # check if cholesterol experiment
     letter = df["Name"][0][0] # F or C
     df_Meta,df_Data = self.__getOrderedDfBasedOnTemplate(df, templateMap, letter)
-
     if letter == "C":
       self._cholesterol = True
 
-    # Get correct column names based on experiment type detection
-    # might need to make a specific function for this task if too much cases
-    if self.experimentType == "Not Labeled":
-      regex = self.__regexExpression["NotLabeled"]
-      self.dataColNames = [f"C{carbon[:2]}:{carbon[2:]} ({mass})" for name in self.dataColNames for num,carbon,mass in re.findall(regex, name)]
-      df_Data.columns = self.dataColNames
-      self.internalRefList = self.dataColNames
-    elif self.experimentType == "Labeled":
-      regex = self.__regexExpression["Labeled"]
-      ionAndMass = np.array([(int(num), int(mass)) for name in self.dataColNames for num,mass in re.findall(regex, name)])
-      if letter == "F": # this is a FAMES file
-        assert ionAndMass[0][1] == 242, "Data not starting with 14:0 fatty acid!"
-      # get indices that would sort the array by ion
-      order = np.argsort([ion for ion,mass in ionAndMass])
-      # reorder the columns by ions
-      df_Data = df_Data.iloc[:, order]
-      ionMasses = ionAndMass[order, 1]
-      # get main FA by subtracting ions weights and checking jumps in weights
-      # for the same fatty acid, the next weight always increase by 1. or it's other fatty acid
-      differences = ionMasses[1:]-ionMasses[:-1]
-      idx = np.concatenate([[0], np.where(differences!=1)[0]+1])        
-      # list of (idx, carbon, saturation)
-      ionParent = [(idx[i], np.ceil((mass-242+14*14)/14).astype(int), [int((desat!=0)*(14-desat)/2) for desat in [(mass-242)%14]][0]) for i,mass in enumerate(ionMasses[idx])]
+    # assign columns names
+    ionsDetected = self.__parseSampleColumns(columnsOfInterest)
+    self.dataColNames = [f"C{ion['description'][:2]}:{ion['description'][2:]} ({ion['mass']})" for ion in ionsDetected]
+    self.internalRefList = self.dataColNames
+    self.experimentType = "Not Labeled"
+
+    # Check if this is a labeled experiment.
+    # If it is, need to rework the columns names by adding info of non parental ion
+    if self.__isLabeledExperiment(ionsDetected):
+      self.experimentType = "Labeled"
+      # groupby parental ions (save initial index for sorting later)
+      groupedIons = groupby(enumerate(ionsDetected), key=lambda ion: ion[1]['description'])
+      groupsIntraSorted = list(map(lambda group: (group[0], sorted(group[1], key=lambda ion: ion[1]['mass'])), groupedIons))
+      
       if letter == "F":
         startM = 0
       else:
-        assert len(ionParent) == 2, "For cholesterol experiment we only expect 2 parental ions!"
+        assert len(groupsIntraSorted) == 2, "For cholesterol experiment we only expect 2 parental ions!"
         startM = -2
-      self.dataColNames = [ f"C{carbon}:{sat} M.{ion}" for i,(idx,carbon,sat) in enumerate(ionParent[:-1]) for ion in range(startM, (ionParent[i+1][0]-idx)+startM)]
-      # add last carbon ions
-      self.dataColNames = self.dataColNames + [f"C{carbon}:{sat} M.{ion}" for ion in range(0, len(ionMasses)-ionParent[-1][0]) for (carbon,sat) in [[ionParent[-1][1], ionParent[-1][2]]]]
-      df_Data.columns = self.dataColNames
+
+      sortedIonNames = [(idx, f"C{ion['description'][:2]}:{ion['description'][2:]} M.{n}") for (key,group) in groupsIntraSorted for n,(idx, ion) in enumerate(group)]
+      orderedIdx,orderedIonNames = zip(*sortedIonNames)
+
+      # reorder the columns by ions
+      df_Data = df_Data.iloc[:, list(orderedIdx)]
+
+      self.dataColNames = orderedIonNames
       # only parental ions for internalRefList
-      self.internalRefList = [ f"C{carbon}:{sat}" for (idx,carbon,sat) in ionParent]
+      self.internalRefList = [ f"C{carbon[:2]}:{carbon[2:]}" for (carbon, group) in groupsIntraSorted]
+
+    df_Data.columns = self.dataColNames
 
     # get sample meta info from template file
     df_TemplateInfo = self.__getExperimentMetaInfoFromMAP(templateMap)
@@ -345,6 +352,84 @@ class MSDataContainer:
       # but save a copy with everything for posterity
       self.dataDf_chol = pd.concat([df_Meta, df_TemplateInfo, df_Data.fillna(0)], axis=1)
     return dataDf
+
+
+  # def __getExperimentTypeAndDataColumNames(self):
+  #   """Determine the type of experiment (Labeled/Unlabeled) based on column names"""
+  #   colNames = pd.read_excel(self.dataFileName, nrows=2).filter(regex="[0-9]+[.|_][0-9]+[.|_][0-9]+").columns
+  #   if len(re.findall(self.__regexExpression["NotLabeled"], colNames[0]))==1:
+  #     experimentType = "Not Labeled"
+  #   elif len(re.findall(self.__regexExpression["Labeled"], colNames[0]))==1:
+  #     experimentType = "Labeled"
+  #   else:
+  #     raise Error("The experiment type could not be determined")
+  #   return experimentType,colNames
+
+  # def __getCleanedUpDataFrames(self):
+  #   '''Return a simplified pandas dataFrame'''
+    
+  #   # load data and template files and isolate data part
+  #   df = pd.read_excel(self.dataFileName, skiprows=1)
+  #   templateMap = pd.read_excel(self.templateFileName, sheet_name="MAP")
+
+  #   letter = df["Name"][0][0] # F or C
+  #   df_Meta,df_Data = self.__getOrderedDfBasedOnTemplate(df, templateMap, letter)
+
+  #   if letter == "C":
+  #     self._cholesterol = True
+
+  #   # Get correct column names based on experiment type detection
+  #   # might need to make a specific function for this task if too much cases
+  #   if self.experimentType == "Not Labeled":
+  #     regex = self.__regexExpression["NotLabeled"]
+  #     self.dataColNames = [f"C{carbon[:2]}:{carbon[2:]} ({mass})" for name in self.dataColNames for num,carbon,mass in re.findall(regex, name)]
+  #     df_Data.columns = self.dataColNames
+  #     self.internalRefList = self.dataColNames
+  #   elif self.experimentType == "Labeled":
+  #     regex = self.__regexExpression["Labeled"]
+  #     ionAndMass = np.array([(int(num), int(mass)) for name in self.dataColNames for num,mass in re.findall(regex, name)])
+  #     if letter == "F": # this is a FAMES file
+  #       assert ionAndMass[0][1] == 242, "Data not starting with 14:0 fatty acid!"
+  #     # get indices that would sort the array by ion
+  #     order = np.argsort([ion for ion,mass in ionAndMass])
+  #     # reorder the columns by ions
+  #     df_Data = df_Data.iloc[:, order]
+  #     ionMasses = ionAndMass[order, 1]
+  #     # get main FA by subtracting ions weights and checking jumps in weights
+  #     # for the same fatty acid, the next weight always increase by 1. or it's other fatty acid
+  #     differences = ionMasses[1:]-ionMasses[:-1]
+  #     idx = np.concatenate([[0], np.where(differences!=1)[0]+1])        
+  #     # list of (idx, carbon, saturation)
+  #     ionParent = [(idx[i], np.ceil((mass-242+14*14)/14).astype(int), [int((desat!=0)*(14-desat)/2) for desat in [(mass-242)%14]][0]) for i,mass in enumerate(ionMasses[idx])]
+  #     if letter == "F":
+  #       startM = 0
+  #     else:
+  #       assert len(ionParent) == 2, "For cholesterol experiment we only expect 2 parental ions!"
+  #       startM = -2
+  #     self.dataColNames = [ f"C{carbon}:{sat} M.{ion}" for i,(idx,carbon,sat) in enumerate(ionParent[:-1]) for ion in range(startM, (ionParent[i+1][0]-idx)+startM)]
+  #     # add last carbon ions
+  #     self.dataColNames = self.dataColNames + [f"C{carbon}:{sat} M.{ion}" for ion in range(0, len(ionMasses)-ionParent[-1][0]) for (carbon,sat) in [[ionParent[-1][1], ionParent[-1][2]]]]
+  #     df_Data.columns = self.dataColNames
+  #     # only parental ions for internalRefList
+  #     self.internalRefList = [ f"C{carbon}:{sat}" for (idx,carbon,sat) in ionParent]
+
+  #   # get sample meta info from template file
+  #   df_TemplateInfo = self.__getExperimentMetaInfoFromMAP(templateMap)
+
+  #   assert len(df_TemplateInfo)==len(df_Data), \
+  #   f"The number of declared samples in the template (n={len(df_TemplateInfo)}) does not match the number of samples detected in the data file (n={len(df_Data)})"
+
+  #   # save the number of columns (meta info) before the actual data
+  #   self._dataStartIdx = len(df_Meta.columns)+len(df_TemplateInfo.columns)
+
+  #   if (letter == "F") | (self.experimentType == "Not Labeled"):
+  #     dataDf = pd.concat([df_Meta, df_TemplateInfo, df_Data.fillna(0)], axis=1)
+  #   else:
+  #     # if chol experiment, remove the M.-2 and M.-1
+  #     dataDf = pd.concat([df_Meta, df_TemplateInfo, df_Data.iloc[:, 2:].fillna(0)], axis=1)
+  #     # but save a copy with everything for posterity
+  #     self.dataDf_chol = pd.concat([df_Meta, df_TemplateInfo, df_Data.fillna(0)], axis=1)
+  #   return dataDf
 
   def __getOrderedDfBasedOnTemplate(self, df, templateMap, letter="F", skipCols=7):
     '''Get new df_Data and df_Meta based on template'''
@@ -683,7 +768,7 @@ class MSDataContainer:
 
     stdAbsorbance = self.getStandardAbsorbance().iloc[:, self._dataStartIdx:]
     assert len(stdAbsorbance) == len(self.standardDf_nMoles),\
-    f"The number of standards declared in the STANDARD_{'_'.join(self.experimentType.upper().split(' '))} sheet (n={len(self.standardDf_nMoles)}) is different than the number of standards declared in the data file (n={len(stdAbsorbance)})"
+    f"The number of standards entered (n={len(self.standardDf_nMoles)}) is different than the number of standards declared in the data file (n={len(stdAbsorbance)})"
 
     if not useMask:
       self._maskFAMES = {}
@@ -1350,6 +1435,7 @@ if __name__ == '__main__':
       # filenames = ["data2/171125DHAmilk2.xlsx", "data2/template.xlsx"]
       # filenames = ["data/example-unlabeled-expt/expt-not-labeled.xlsx", "data/example-unlabeled-expt/template_not_labeled.xlsx"]
       filenames = ["Dylan/_chol-2/template-Lung Pilot.xlsx", "Dylan/_chol-2/LungPilot-CHOL-Parental ion only.xlsx"]
+
       appData = MSDataContainer(filenames)
       try:
         newInternalRef = [name for name in appData.internalRefList if appData.internalRef in name][0]
@@ -1367,7 +1453,8 @@ if __name__ == '__main__':
       # appData.computeNACorrectionDf()
       # appData.dataDf_norm = appData.computeNormalizedData()
       # appData.computeStandardFits()
-      filenames = ["data/example-cholesterol/expt-chol.xlsx", "data/example-cholesterol/template.xlsx"]
+      # filenames = ["data/example-cholesterol/expt-chol.xlsx", "data/example-cholesterol/template.xlsx"]
+      filenames = ["data/example-labeled-nonparental/180802ETV39_LungFAMES.xlsx", "data/example-labeled-nonparental/template-ETV39_LungFAMES.xlsx"]
 
       appData = MSDataContainer(filenames)
   ##########################################
