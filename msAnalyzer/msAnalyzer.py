@@ -242,8 +242,8 @@ class MSDataContainer:
     self.dataFileName, self.templateFileName = self.__getDataAndTemplateFileNames(fileNames)
     self._baseFileName = os.path.basename(self.dataFileName).split('.')[0]
     self.pathDirName = os.path.dirname(self.dataFileName)
-    self.__regexExpression = {"NotLabeled": "([0-9]+)_([0-9]+)_([0-9]+)",
-                              "Labeled": "([0-9]+)_([0-9]+).[0-9]+",
+    self.__regexExpression = {#"NotLabeled": "([0-9]+)_([0-9]+)_([0-9]+)",
+                              #"Labeled": "([0-9]+)_([0-9]+).[0-9]+",
                               "Samples": '^(?!neg|S[0-9]+$)',
                               "colNames": '([0-9]+)_([0-9]+)[.|_][0-9]+_([0-9]+)'}
     # self.experimentType, self.dataColNames = self.__getExperimentTypeAndDataColumNames()
@@ -288,6 +288,37 @@ class MSDataContainer:
     uniqueIons = set(ionsList)
     return len(uniqueIons)/len(ionsList) < 0.6
 
+  def __getIonParentedGroups(self, ionsDetected):
+  # groupby parental ions (save initial index for sorting later)
+    groupedIons = groupby(enumerate(ionsDetected), key=lambda ion: ion[1]['description'])
+    groupsIntraSorted = list(map(lambda group: (group[0], sorted(group[1], key=lambda ion: ion[1]['mass'])), groupedIons))
+
+    # split groups if most abundant ion present
+    finalGroups = []
+    for key,group in groupsIntraSorted:
+      # only process groups that have more than 1 ion
+      if len(group) != 1:
+        masses = np.array([ion[1]["mass"] for ion in group])
+        differences = masses[1:]-masses[0:-1]
+        idx = np.where(differences != 1)
+        # and that have non unitary jumps in differences from ion to ion
+        if len(idx[0])>0:
+          start = 0
+          for i in range(len(idx[0])+1):
+            if i < len(idx[0]):
+              end = idx[0][i]+1
+              subgroup = group[start:end]
+              start = idx[0][i] + 1
+              finalGroups.append((f"{key}-{i}", subgroup))
+            else:
+              subgroup = group[start:]
+              finalGroups.append((f"{key}-{i}", subgroup))
+        else:
+          finalGroups.append((key, group))
+      else:
+        finalGroups.append((key, group))
+    return finalGroups
+
 
   def _computeFileAttributes(self):
     
@@ -313,17 +344,17 @@ class MSDataContainer:
     # If it is, need to rework the columns names by adding info of non parental ion
     if self.__isLabeledExperiment(ionsDetected):
       self.experimentType = "Labeled"
-      # groupby parental ions (save initial index for sorting later)
-      groupedIons = groupby(enumerate(ionsDetected), key=lambda ion: ion[1]['description'])
-      groupsIntraSorted = list(map(lambda group: (group[0], sorted(group[1], key=lambda ion: ion[1]['mass'])), groupedIons))
+
+      # split groups if most abundant ion present
+      finalGroups = self.__getIonParentedGroups(ionsDetected)
       
       if letter == "F":
         startM = 0
       else:
-        assert len(groupsIntraSorted) == 2, "For cholesterol experiment we only expect 2 parental ions!"
+        assert len(finalGroups) == 2, "For cholesterol experiment we only expect 2 parental ions!"
         startM = -2
 
-      sortedIonNames = [(idx, f"C{ion['description'][:2]}:{ion['description'][2:]} M.{n}") for (key,group) in groupsIntraSorted for n,(idx, ion) in enumerate(group)]
+      sortedIonNames = [(idx, f"C{ion['description'][:2]}:{ion['description'][2:]} ({group[0][1]['mass']}) M.{n}") for (key,group) in finalGroups for n,(idx, ion) in enumerate(group)]
       orderedIdx,orderedIonNames = zip(*sortedIonNames)
 
       # reorder the columns by ions
@@ -331,7 +362,7 @@ class MSDataContainer:
 
       self.dataColNames = orderedIonNames
       # only parental ions for internalRefList
-      self.internalRefList = [ f"C{carbon[:2]}:{carbon[2:]}" for (carbon, group) in groupsIntraSorted]
+      self.internalRefList = [ f"C{carbon.split('-')[0][:2]}:{carbon.split('-')[0][2:]} ({group[0][1]['mass']})" for (carbon, group) in finalGroups]
 
     df_Data.columns = self.dataColNames
 
@@ -352,84 +383,6 @@ class MSDataContainer:
       # but save a copy with everything for posterity
       self.dataDf_chol = pd.concat([df_Meta, df_TemplateInfo, df_Data.fillna(0)], axis=1)
     return dataDf
-
-
-  # def __getExperimentTypeAndDataColumNames(self):
-  #   """Determine the type of experiment (Labeled/Unlabeled) based on column names"""
-  #   colNames = pd.read_excel(self.dataFileName, nrows=2).filter(regex="[0-9]+[.|_][0-9]+[.|_][0-9]+").columns
-  #   if len(re.findall(self.__regexExpression["NotLabeled"], colNames[0]))==1:
-  #     experimentType = "Not Labeled"
-  #   elif len(re.findall(self.__regexExpression["Labeled"], colNames[0]))==1:
-  #     experimentType = "Labeled"
-  #   else:
-  #     raise Error("The experiment type could not be determined")
-  #   return experimentType,colNames
-
-  # def __getCleanedUpDataFrames(self):
-  #   '''Return a simplified pandas dataFrame'''
-    
-  #   # load data and template files and isolate data part
-  #   df = pd.read_excel(self.dataFileName, skiprows=1)
-  #   templateMap = pd.read_excel(self.templateFileName, sheet_name="MAP")
-
-  #   letter = df["Name"][0][0] # F or C
-  #   df_Meta,df_Data = self.__getOrderedDfBasedOnTemplate(df, templateMap, letter)
-
-  #   if letter == "C":
-  #     self._cholesterol = True
-
-  #   # Get correct column names based on experiment type detection
-  #   # might need to make a specific function for this task if too much cases
-  #   if self.experimentType == "Not Labeled":
-  #     regex = self.__regexExpression["NotLabeled"]
-  #     self.dataColNames = [f"C{carbon[:2]}:{carbon[2:]} ({mass})" for name in self.dataColNames for num,carbon,mass in re.findall(regex, name)]
-  #     df_Data.columns = self.dataColNames
-  #     self.internalRefList = self.dataColNames
-  #   elif self.experimentType == "Labeled":
-  #     regex = self.__regexExpression["Labeled"]
-  #     ionAndMass = np.array([(int(num), int(mass)) for name in self.dataColNames for num,mass in re.findall(regex, name)])
-  #     if letter == "F": # this is a FAMES file
-  #       assert ionAndMass[0][1] == 242, "Data not starting with 14:0 fatty acid!"
-  #     # get indices that would sort the array by ion
-  #     order = np.argsort([ion for ion,mass in ionAndMass])
-  #     # reorder the columns by ions
-  #     df_Data = df_Data.iloc[:, order]
-  #     ionMasses = ionAndMass[order, 1]
-  #     # get main FA by subtracting ions weights and checking jumps in weights
-  #     # for the same fatty acid, the next weight always increase by 1. or it's other fatty acid
-  #     differences = ionMasses[1:]-ionMasses[:-1]
-  #     idx = np.concatenate([[0], np.where(differences!=1)[0]+1])        
-  #     # list of (idx, carbon, saturation)
-  #     ionParent = [(idx[i], np.ceil((mass-242+14*14)/14).astype(int), [int((desat!=0)*(14-desat)/2) for desat in [(mass-242)%14]][0]) for i,mass in enumerate(ionMasses[idx])]
-  #     if letter == "F":
-  #       startM = 0
-  #     else:
-  #       assert len(ionParent) == 2, "For cholesterol experiment we only expect 2 parental ions!"
-  #       startM = -2
-  #     self.dataColNames = [ f"C{carbon}:{sat} M.{ion}" for i,(idx,carbon,sat) in enumerate(ionParent[:-1]) for ion in range(startM, (ionParent[i+1][0]-idx)+startM)]
-  #     # add last carbon ions
-  #     self.dataColNames = self.dataColNames + [f"C{carbon}:{sat} M.{ion}" for ion in range(0, len(ionMasses)-ionParent[-1][0]) for (carbon,sat) in [[ionParent[-1][1], ionParent[-1][2]]]]
-  #     df_Data.columns = self.dataColNames
-  #     # only parental ions for internalRefList
-  #     self.internalRefList = [ f"C{carbon}:{sat}" for (idx,carbon,sat) in ionParent]
-
-  #   # get sample meta info from template file
-  #   df_TemplateInfo = self.__getExperimentMetaInfoFromMAP(templateMap)
-
-  #   assert len(df_TemplateInfo)==len(df_Data), \
-  #   f"The number of declared samples in the template (n={len(df_TemplateInfo)}) does not match the number of samples detected in the data file (n={len(df_Data)})"
-
-  #   # save the number of columns (meta info) before the actual data
-  #   self._dataStartIdx = len(df_Meta.columns)+len(df_TemplateInfo.columns)
-
-  #   if (letter == "F") | (self.experimentType == "Not Labeled"):
-  #     dataDf = pd.concat([df_Meta, df_TemplateInfo, df_Data.fillna(0)], axis=1)
-  #   else:
-  #     # if chol experiment, remove the M.-2 and M.-1
-  #     dataDf = pd.concat([df_Meta, df_TemplateInfo, df_Data.iloc[:, 2:].fillna(0)], axis=1)
-  #     # but save a copy with everything for posterity
-  #     self.dataDf_chol = pd.concat([df_Meta, df_TemplateInfo, df_Data.fillna(0)], axis=1)
-  #   return dataDf
 
   def __getOrderedDfBasedOnTemplate(self, df, templateMap, letter="F", skipCols=7):
     '''Get new df_Data and df_Meta based on template'''
@@ -497,7 +450,7 @@ class MSDataContainer:
     for ul in self.volumeStandards:
       template[f"Std-nMol-{ul}"] = 1000*template[f"Std-Conc-{ul}"]/template["MW"]
     # create a clean template with only masses and carbon name
-    templateClean = pd.concat([template.Chain, template.filter(regex="Std-nMol")], axis=1).transpose()
+    templateClean = pd.concat([template.Chain, template.filter(like="Std-nMol")], axis=1).transpose()
     if self.experimentType == "Not Labeled":
       templateClean.columns = [f"C{chain} ({int(mass)})" for chain,mass in zip(self.__standardDf_template.Chain, self.__standardDf_template.MW)]
     else:
@@ -579,7 +532,7 @@ class MSDataContainer:
     '''Correct all the data for natural abundance'''
     correctedData = self.dataDf.iloc[:, :self._dataStartIdx]
     for parentalIon in self.internalRefList:
-      ionMID = self.dataDf.filter(regex=parentalIon)
+      ionMID = self.dataDf.filter(like=parentalIon)
       if ionMID.shape[1]<=1:
         # no clusters, go to next
         print(parentalIon, "doesn't have non parental ions")
@@ -598,7 +551,7 @@ class MSDataContainer:
       dataToSum = self.dataDf_chol
     else:
       dataToSum = self.dataDf
-    sumFrac = pd.concat([dataToSum.filter(regex=parentalIon).sum(axis=1) for parentalIon in self.internalRefList], axis=1)
+    sumFrac = pd.concat([dataToSum.filter(like=parentalIon).sum(axis=1) for parentalIon in self.internalRefList], axis=1)
     sumFrac.columns = self.internalRefList
     return sumFrac
 
@@ -609,7 +562,7 @@ class MSDataContainer:
 
   def calculateLabeledProportionForAll(self):
     '''Return dataFrame of the labeling proportions for all the ions'''
-    proportions = pd.concat([self.calculateLabeledProportion(self.dataDf_corrected.filter(regex=parentalIon)) for parentalIon in self.internalRefList], axis=1)
+    proportions = pd.concat([self.calculateLabeledProportion(self.dataDf_corrected.filter(like=parentalIon)) for parentalIon in self.internalRefList], axis=1)
     proportions.columns = self.internalRefList
     return pd.concat([self.dataDf.iloc[:, :self._dataStartIdx], proportions], axis=1)
 
@@ -644,12 +597,13 @@ class MSDataContainer:
     fig2.suptitle(f"Experiment: {self._baseFileName}")
 
     for i,(col,ax1,ax2) in enumerate(zip(quantificationDf.columns,  axes1.flatten(), axes2.flatten())):
+      targetIon = col.split(" ")[0]
       # if slope/intercept from standard are present for this ion, then continue
       slope,intercept,r2 = self.standardDf_fitResults.loc[["slope", "intercept", "R2"], col]
       
       # standards values and fits
       try:
-        xvals = self.standardDf_nMoles[col].values
+        xvals = self.standardDf_nMoles[targetIon].values
       except:
         # if error, it means that parental ion data were used
         parentalIon = self._checkIfParentalIonDataExistsFor(col)[1]
@@ -774,9 +728,10 @@ class MSDataContainer:
       self._maskFAMES = {}
 
     for i,col in enumerate(stdAbsorbance.columns):
-      if col in self.standardDf_nMoles.columns:
+      targetIon = col.split(" ")[0] # keep only carbon info, not mass if there is
+      if targetIon in self.standardDf_nMoles.columns:
         # if nMoles data are present for this exact ion
-        xvals = self.standardDf_nMoles[col].values
+        xvals = self.standardDf_nMoles[targetIon].values
       else:
         isParentalIon = self._checkIfParentalIonDataExistsFor(col)
         if isParentalIon[0]:
@@ -1349,8 +1304,8 @@ class MSAnalyzer:
     # get row associated with sampleName provided
     row = np.where(self.dataObject.dataDf["Name"] == sampleName.split(" ")[0])[0][0]
 
-    originalData = self.dataObject.dataDf.filter(regex=famesName).iloc[row]
-    correctedData = self.dataObject.dataDf_corrected.filter(regex=famesName).iloc[row]
+    originalData = self.dataObject.dataDf.filter(like=famesName).iloc[row]
+    correctedData = self.dataObject.dataDf_corrected.filter(like=famesName).iloc[row]
 
     # make x label
     xLabels = [f"M.{i}" for i in range(len(originalData))]
@@ -1381,8 +1336,8 @@ class MSAnalyzer:
 
     for name in self.FANames:
 
-      originalData = self.dataObject.dataDf.filter(regex=name)
-      correctedData = self.dataObject.dataDf_corrected.filter(regex=name)
+      originalData = self.dataObject.dataDf.filter(like=name)
+      correctedData = self.dataObject.dataDf_corrected.filter(like=name)
       
       # if only one column, it means it was not a Fames with non parental ions
       if len(originalData.columns)==1:
@@ -1454,9 +1409,16 @@ if __name__ == '__main__':
       # appData.dataDf_norm = appData.computeNormalizedData()
       # appData.computeStandardFits()
       # filenames = ["data/example-cholesterol/expt-chol.xlsx", "data/example-cholesterol/template.xlsx"]
-      filenames = ["data/example-labeled-nonparental/180802ETV39_LungFAMES.xlsx", "data/example-labeled-nonparental/template-ETV39_LungFAMES.xlsx"]
+      filenames = ["data/example-labeled-nonparental/180808ETV39_LungFAMES.xlsx", "data/example-labeled-nonparental/template-ETV39_LungFAMES.xlsx"]
 
       appData = MSDataContainer(filenames)
+      try:
+        newInternalRef = [name for name in appData.internalRefList if appData.internalRef in name][0]
+      except:
+        newInternalRef = appData.internalRefList[-1]
+      appData.updateInternalRef(newInternalRef)
+      appData.updateStandards(244, 250, [1, 5, 10, 20])
+      appData.updateTracer("H")
   ##########################################
   ## This is what __main__ should look like
   else:
