@@ -242,12 +242,8 @@ class MSDataContainer:
     self.dataFileName, self.templateFileName = self.__getDataAndTemplateFileNames(fileNames)
     self._baseFileName = os.path.basename(self.dataFileName).split('.')[0]
     self.pathDirName = os.path.dirname(self.dataFileName)
-    self.__regexExpression = {#"NotLabeled": "([0-9]+)_([0-9]+)_([0-9]+)",
-                              #"Labeled": "([0-9]+)_([0-9]+).[0-9]+",
-                              "Samples": '^(?!neg|S[0-9]+$)',
+    self.__regexExpression = {"Samples": '^(?!neg|S[0-9]+$)',
                               "colNames": '([0-9]+)_([0-9]+)[.|_][0-9]+_([0-9]+)'}
-    # self.experimentType, self.dataColNames = self.__getExperimentTypeAndDataColumNames()
-    # self.dataDf = self.__getCleanedUpDataFrames()
     self.dataDf = self._computeFileAttributes()
     self.__standardDf_template = self.__getStandardsTemplateDf()
     self.volumeMixTotal = 500
@@ -451,10 +447,7 @@ class MSDataContainer:
       template[f"Std-nMol-{ul}"] = 1000*template[f"Std-Conc-{ul}"]/template["MW"]
     # create a clean template with only masses and carbon name
     templateClean = pd.concat([template.Chain, template.filter(like="Std-nMol")], axis=1).transpose()
-    if self.experimentType == "Not Labeled":
-      templateClean.columns = [f"C{chain} ({int(mass)})" for chain,mass in zip(self.__standardDf_template.Chain, self.__standardDf_template.MW)]
-    else:
-      templateClean.columns = list(map(lambda chain: f"C{chain}", templateClean.iloc[0]))
+    templateClean.columns = [f"C{chain} ({int(mass)})" for chain,mass in zip(self.__standardDf_template.Chain, self.__standardDf_template.MW)]
     templateClean = templateClean.iloc[1:]
     return templateClean
 
@@ -597,13 +590,12 @@ class MSDataContainer:
     fig2.suptitle(f"Experiment: {self._baseFileName}")
 
     for i,(col,ax1,ax2) in enumerate(zip(quantificationDf.columns,  axes1.flatten(), axes2.flatten())):
-      targetIon = col.split(" ")[0]
       # if slope/intercept from standard are present for this ion, then continue
       slope,intercept,r2 = self.standardDf_fitResults.loc[["slope", "intercept", "R2"], col]
       
       # standards values and fits
       try:
-        xvals = self.standardDf_nMoles[targetIon].values
+        xvals = self.standardDf_nMoles[col].values
       except:
         # if error, it means that parental ion data were used
         parentalIon = self._checkIfParentalIonDataExistsFor(col)[1]
@@ -728,10 +720,9 @@ class MSDataContainer:
       self._maskFAMES = {}
 
     for i,col in enumerate(stdAbsorbance.columns):
-      targetIon = col.split(" ")[0] # keep only carbon info, not mass if there is
-      if targetIon in self.standardDf_nMoles.columns:
+      if col in self.standardDf_nMoles.columns:
         # if nMoles data are present for this exact ion
-        xvals = self.standardDf_nMoles[targetIon].values
+        xvals = self.standardDf_nMoles[col].values
       else:
         isParentalIon = self._checkIfParentalIonDataExistsFor(col)
         if isParentalIon[0]:
