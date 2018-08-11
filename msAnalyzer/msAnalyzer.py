@@ -571,6 +571,8 @@ class MSDataContainer:
       extension = "_modified"
 
     self.dataDf_quantification = self.computeQuantificationFromStandardFits(useMask=useMask)
+    # index of data of interest (not the standards)
+    expDataLoc = self.dataDf_quantification.SampleName.str.match(self.__regexExpression["Samples"], na=False)
     stdAbsorbance = self.getStandardAbsorbance().iloc[:, self._dataStartIdx:]
     quantificationDf = self.dataDf_quantification.iloc[:, 3:]
 
@@ -623,7 +625,7 @@ class MSDataContainer:
       ax2.plot(xvals[[not i for i in mask]], yvals[[not i for i in mask]], "x", color="black", ms=3)
       ax2.plot(xfit, yfit, "-", color="#fb4c52")
       # add values calculated from curve (visually adjust for normalization by weight done above)
-      ax2.plot(quantificationDf[col], self.dataDf_norm[col], "o", color="#FF8B22", alpha=0.3)
+      ax2.plot(quantificationDf.loc[expDataLoc, col], self.dataDf_norm.loc[expDataLoc, col], "o", color="#FF8B22", alpha=0.3)
       ax2.text(ax1.get_xlim()[0]+(ax2.get_xlim()[1]-ax2.get_xlim()[0])*0.05, ax2.get_ylim()[0]+(ax2.get_ylim()[1]-ax2.get_ylim()[0])*0.9, f"R2={r2:.4f}", size=14, color="#ce4ad0")
       ax2.text(ax1.get_xlim()[0]+(ax2.get_xlim()[1]-ax2.get_xlim()[0])*0.97, ax2.get_ylim()[0]+(ax2.get_ylim()[1]-ax2.get_ylim()[0])*0.05, f"y={slope:.4f}x+{intercept:.4f}", size=14, color="#fb4c52", ha="right")
       ax2.set_title(col)
@@ -652,7 +654,6 @@ class MSDataContainer:
     standards = self.getConcatenatedStandardResults()
     standards.to_excel(writer, sheet_name='Standards', index=True)
     # data
-    expDataLoc = self.dataDf_quantification.SampleName.str.match(self.__regexExpression["Samples"], na=False)
     self.dataDf_quantification.loc[expDataLoc].to_excel(writer, sheet_name='QuantTotal_nMoles', index=False)
     resNorm = pd.concat([self.dataDf_norm["SampleID"], self.dataDf_norm["SampleName"], self.dataDf_norm["Comments"], quantificationDf.divide(normalization, axis=0)], axis=1)
     resNorm.loc[expDataLoc].to_excel(writer, sheet_name='QuantTotal_nMoles_mg', index=False)
@@ -1410,6 +1411,7 @@ if __name__ == '__main__':
       appData.updateInternalRef(newInternalRef)
       appData.updateStandards(244, 250, [1, 5, 10, 20])
       appData.updateTracer("H")
+
   ##########################################
   ## This is what __main__ should look like
   else:
