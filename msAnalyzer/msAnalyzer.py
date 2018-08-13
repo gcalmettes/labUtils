@@ -16,7 +16,6 @@ import numpy as np
 import pandas as pd
 import scipy.stats as stats
 from scipy import optimize
-from multiprocessing import Pool
 from itertools import groupby
 
 
@@ -213,9 +212,8 @@ class NAProcess:
       initialMID = np.zeros_like(targetMIDList[0])
       argsList = [(self._computeCost, initialMID, targetMID, correctionMatrix) for targetMID in targetMIDList]
 
-      # Lauch 4 parrallel processes
-      processes = Pool(4)
-      allRes = processes.map(self._minimizeCost, argsList)
+      # minimize for each MID
+      allRes = [self._minimizeCost(args) for args in argsList]
       correctedData = np.vstack([res.x for res in allRes])
 
     return pd.DataFrame(columns=dataFrame.columns, data=correctedData[:, :dataFrame.shape[1]])
