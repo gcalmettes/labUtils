@@ -2,13 +2,15 @@
 
 Collection of script/tools to simplify the data analysis workflow of the lab.
 
-### msAnalysis
+### msAnalyzer
 
 TKinter app to analyze Mass Spectroscopy data.
 
 Tools: Python
 
 Dependencies: TKinter, Numpy, Pandas, Scipy
+
+<img style="max-width: 200px; height: auto;" src="https://raw.githubusercontent.com/gcalmettes/labUtils/master/msAnalyzer/msAnalyzer-img.png"></img>
 
 ### traceViewer
 
