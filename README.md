@@ -10,13 +10,15 @@ Tools: Python
 
 Dependencies: TKinter, Numpy, Pandas, Scipy
 
-<img style="max-width: 200px; height: auto;" src="https://raw.githubusercontent.com/gcalmettes/labUtils/master/msAnalyzer/msAnalyzer-img.png"></img>
+<img style="display: block; margin-left: auto; margin-right: auto; width: 70%;" src="https://raw.githubusercontent.com/gcalmettes/labUtils/master/msAnalyzer/msAnalyzer-img.png"></img>
 
 ### traceViewer
 
 Quickly load data from a csv file and inspect it using a focus+context approach.
 
 Tools: [D3js](https://d3js.org)
+
+<img style="display: block; margin-left: auto; margin-right: auto; width: 65%;" src="https://raw.githubusercontent.com/gcalmettes/labUtils/master/traceViewer/trace-viewer-img.png"></img>
 
 ### atfFilesAnalyzer
 
@@ -49,6 +51,8 @@ An application of the varMap tool to detect and quantify the translocation of th
 
 Tools: Python
 
+<img style="display: block; margin-left: auto; margin-right: auto; width: 60%;" src="https://raw.githubusercontent.com/gcalmettes/labUtils/master/varMap/varmap-img.png"></img>
+
 ### reverseJet
 
 The Jet colormap is [bad](https://jakevdp.github.io/blog/2014/10/16/how-bad-is-your-colormap/).
@@ -57,3 +61,5 @@ reverseJet renders the gray-based luminescence version of the original image.
 Tools: Python
 
 Dependencies: Skimage 
+
+<img style="display: block; margin-left: auto; margin-right: auto; width: 60%;" src="https://raw.githubusercontent.com/gcalmettes/labUtils/master/reverseJet/reverse-jet-img.png"></img>
