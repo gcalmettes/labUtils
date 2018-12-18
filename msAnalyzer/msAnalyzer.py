@@ -240,8 +240,8 @@ class MSDataContainer:
     self.dataFileName, self.templateFileName = self.__getDataAndTemplateFileNames(fileNames)
     self._baseFileName = os.path.basename(self.dataFileName).split('.')[0]
     self.pathDirName = os.path.dirname(self.dataFileName)
-    self.__regexExpression = {"Samples": '^(?!neg|S[0-9]+$)',
-                              "colNames": '([0-9]+)_([0-9]+)[.|_][0-9]+_([0-9]+)'}
+    self.__regexExpression = {"Samples": '^(?!neg|S\d+$)',
+                              "colNames": '(\d+)_(\d+)(?:\.\d+)?_(\d+)'}
     self.dataDf = self._computeFileAttributes()
     self.__standardDf_template = self.__getStandardsTemplateDf()
     self.volumeMixTotal = 500
