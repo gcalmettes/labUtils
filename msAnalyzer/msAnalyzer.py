@@ -673,17 +673,20 @@ class MSDataContainer:
   
     # add a sheet with experiment log
     nSamples = len(self.volumesOfDilution)
+    nVolumesStandards = len(self.volumeStandards)
+    # keep the lengthiest to use to extend other arrays
+    nMax = nSamples if (nSamples >= nVolumesStandards) else nVolumesStandards
     log = {
-      "Experiment type": [self.experimentType] + [np.nan]*(nSamples-1),
-      "Volume Mix Total": [self.volumeMixTotal] + [np.nan]*(nSamples-1),
-      "Volume Mix Used": [self.volumeMixForPrep] + [np.nan]*(nSamples-1),
-      "Internal Reference": [self.internalRef] + [np.nan]*(nSamples-1),
-      "Volume standards": list(self.volumeStandards) + [np.nan]*(nSamples-len(self.volumeStandards)),
-      "Volume of Dilution": self.volumesOfDilution,
-      "Volume of Sample Measured": self.volumesOfSampleSoupUsed,
-      "Normalization": ["Weigth only" if self.weightNormalization else "Relative Weight"] + [np.nan]*(nSamples-1),
-      "Isotope tracer": [self.tracer] + [np.nan]*(nSamples-1),
-      "Isotope tracer purity": list(self.tracerPurity) + [np.nan]*(nSamples-len(self.tracerPurity))
+      "Experiment type": [self.experimentType] + [np.nan]*(nMax-1),
+      "Volume Mix Total": [self.volumeMixTotal] + [np.nan]*(nMax-1),
+      "Volume Mix Used": [self.volumeMixForPrep] + [np.nan]*(nMax-1),
+      "Internal Reference": [self.internalRef] + [np.nan]*(nMax-1),
+      "Volume standards": list(self.volumeStandards) + [np.nan]*(nMax-len(self.volumeStandards)),
+      "Volume of Dilution": list(self.volumesOfDilution) + [np.nan]*(nMax-len(self.volumesOfDilution)),
+      "Volume of Sample Measured": list(self.volumesOfSampleSoupUsed) + [np.nan]*(nMax-len(self.volumesOfSampleSoupUsed)),
+      "Normalization": ["Weigth only" if self.weightNormalization else "Relative Weight"] + [np.nan]*(nMax-1),
+      "Isotope tracer": [self.tracer] + [np.nan]*(nMax-1),
+      "Isotope tracer purity": list(self.tracerPurity) + [np.nan]*(nMax-len(self.tracerPurity))
     }
     pd.DataFrame(log).transpose().to_excel(writer, sheet_name='Log', index=True)
 
