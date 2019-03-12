@@ -867,7 +867,7 @@ class MSAnalyzer:
     FAMESframe = ttk.LabelFrame(self.window, text="Select the internal control", relief=tk.GROOVE)
     FAMESframe.grid(row=1, column=1, columnspan=3, sticky=tk.E + tk.W + tk.N + tk.S, padx=2)
 
-    FAMESListLabel = tk.Label(FAMESframe, text="FAMES", fg="black", bg="#ECECEC")
+    FAMESListLabel = tk.Label(FAMESframe, text="LIPID", fg="black", bg="#ECECEC")
     FAMESListLabel.grid(row=2, column=1, sticky=tk.W + tk.N)
 
     # by default, choose internal reference defined in dataObject (C19:0)
@@ -1099,7 +1099,7 @@ class MSAnalyzer:
         
     selectFrame = tk.Tk()
     selectFrame.wm_title("FAMES standard to modify")
-    label = ttk.Label(selectFrame, text="Select the FAMES standard to modify", font=("Verdana", 14))
+    label = ttk.Label(selectFrame, text="Select the LIPID(s) for which you want\n to correct the standard curve", font=("Verdana", 14))
     label.grid(row=1, column=1, columnspan=2, padx=10, pady=10)
 
     FAMESlistbox = tk.Listbox(selectFrame, height=10, selectmode='multiple')
